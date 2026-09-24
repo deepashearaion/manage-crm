@@ -7,9 +7,15 @@ import (
 	"authentication-backend/middleware"
 )
 
-func SetupRoutes(authHandler *handlers.AuthHandler) {
+func SetupRoutes(
+	authHandler *handlers.AuthHandler,
+	contactHandler *handlers.ContactHandler,
+) {
 
-	// Public authentication APIs
+	// =========================
+	// Public Authentication APIs
+	// =========================
+
 	http.HandleFunc(
 		"/api/auth/register",
 		authHandler.Register,
@@ -35,9 +41,21 @@ func SetupRoutes(authHandler *handlers.AuthHandler) {
 		authHandler.ResetPassword,
 	)
 
-	// Protected API
+	// =========================
+	// Protected APIs
+	// =========================
+
 	http.HandleFunc(
 		"/api/profile",
 		middleware.JWTValidation(authHandler.Profile),
+	)
+
+	// =========================
+	// Contact APIs
+	// =========================
+
+	http.HandleFunc(
+		"/api/contacts",
+		middleware.JWTValidation(contactHandler.CreateContact),
 	)
 }

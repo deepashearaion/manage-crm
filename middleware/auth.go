@@ -1,11 +1,18 @@
 package middleware
 
 import (
+	"context"
 	"net/http"
 	"strings"
 
 	"authentication-backend/utils"
+
+	"github.com/golang-jwt/jwt/v5"
 )
+
+type contextKey string
+
+const UserIDKey contextKey = "userID"
 
 func JWTValidation(next http.HandlerFunc) http.HandlerFunc {
 
@@ -45,6 +52,46 @@ func JWTValidation(next http.HandlerFunc) http.HandlerFunc {
 			)
 			return
 		}
+
+		claims, ok := token.Claims.(jwt.MapClaims)
+		if !ok {
+			http.Error(
+				w,
+				"Invalid token claims",
+				http.StatusUnauthorized,
+			)
+			return
+		}
+
+		userIDValue, ok := claims["user_id"]
+		if !ok {
+			http.Error(
+				w,
+				"User ID not found in token",
+				http.StatusUnauthorized,
+			)
+			return
+		}
+
+		userIDFloat, ok := userIDValue.(float64)
+		if !ok {
+			http.Error(
+				w,
+				"Invalid user ID in token",
+				http.StatusUnauthorized,
+			)
+			return
+		}
+
+		userID := int64(userIDFloat)
+
+		ctx := context.WithValue(
+			r.Context(),
+			UserIDKey,
+			userID,
+		)
+
+		r = r.WithContext(ctx)
 
 		next.ServeHTTP(w, r)
 	}

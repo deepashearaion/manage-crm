@@ -25,7 +25,11 @@ func main() {
 		DB: conn,
 	}
 
-	routes.SetupRoutes(authHandler)
+	contactHandler := &handlers.ContactHandler{
+		DB: conn,
+	}
+
+	routes.SetupRoutes(authHandler, contactHandler)
 
 	fmt.Println("Server running on http://localhost:8080")
 
