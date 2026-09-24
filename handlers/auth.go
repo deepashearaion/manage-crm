@@ -37,8 +37,15 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if request.Name == "" || request.Email == "" || request.Password == "" {
-		http.Error(w, "Name, email and password are required", http.StatusBadRequest)
+	if request.Name == "" ||
+		request.Email == "" ||
+		request.Password == "" {
+
+		http.Error(
+			w,
+			"Name, email and password are required",
+			http.StatusBadRequest,
+		)
 		return
 	}
 
@@ -51,18 +58,31 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	).Scan(&existingEmail)
 
 	if err == nil {
-		http.Error(w, "Email already registered", http.StatusConflict)
+		http.Error(
+			w,
+			"Email already registered",
+			http.StatusConflict,
+		)
 		return
 	}
 
 	if err != pgx.ErrNoRows {
-		http.Error(w, "Database error", http.StatusInternalServerError)
+		http.Error(
+			w,
+			"Database error",
+			http.StatusInternalServerError,
+		)
 		return
 	}
 
 	hashedPassword, err := utils.HashPassword(request.Password)
+
 	if err != nil {
-		http.Error(w, "Password hashing failed", http.StatusInternalServerError)
+		http.Error(
+			w,
+			"Password hashing failed",
+			http.StatusInternalServerError,
+		)
 		return
 	}
 
@@ -70,7 +90,7 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 
 	err = h.DB.QueryRow(
 		context.Background(),
-		`INSERT INTO users 
+		`INSERT INTO users
 		(name, email, password_hash)
 		VALUES ($1, $2, $3)
 		RETURNING id`,
@@ -80,7 +100,11 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	).Scan(&userID)
 
 	if err != nil {
-		http.Error(w, "User creation failed", http.StatusInternalServerError)
+		http.Error(
+			w,
+			"User creation failed",
+			http.StatusInternalServerError,
+		)
 		return
 	}
 
@@ -98,8 +122,13 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	var request LoginRequest
 
 	err := json.NewDecoder(r.Body).Decode(&request)
+
 	if err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		http.Error(
+			w,
+			"Invalid request body",
+			http.StatusBadRequest,
+		)
 		return
 	}
 
@@ -113,14 +142,37 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	).Scan(&userID, &passwordHash)
 
 	if err != nil {
-		http.Error(w, "Invalid email or password", http.StatusUnauthorized)
+		http.Error(
+			w,
+			"Invalid email or password",
+			http.StatusUnauthorized,
+		)
 		return
 	}
 
-	err = utils.CheckPassword(request.Password, passwordHash)
+	err = utils.CheckPassword(
+		request.Password,
+		passwordHash,
+	)
 
 	if err != nil {
-		http.Error(w, "Invalid email or password", http.StatusUnauthorized)
+		http.Error(
+			w,
+			"Invalid email or password",
+			http.StatusUnauthorized,
+		)
+		return
+	}
+
+	// Generate JWT token after successful login
+	token, err := utils.GenerateJWT(userID)
+
+	if err != nil {
+		http.Error(
+			w,
+			"Failed to generate token",
+			http.StatusInternalServerError,
+		)
 		return
 	}
 
@@ -129,6 +181,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"message": "Login successful",
 		"user_id": userID,
+		"token":   token,
 	})
 }
 
@@ -148,8 +201,13 @@ func (h *AuthHandler) ForgotPassword(w http.ResponseWriter, r *http.Request) {
 	}
 
 	err := json.NewDecoder(r.Body).Decode(&request)
+
 	if err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		http.Error(
+			w,
+			"Invalid request body",
+			http.StatusBadRequest,
+		)
 		return
 	}
 
@@ -162,11 +220,19 @@ func (h *AuthHandler) ForgotPassword(w http.ResponseWriter, r *http.Request) {
 	).Scan(&userID)
 
 	if err != nil {
-		http.Error(w, "If the email exists, a reset process has been started", http.StatusOK)
+		http.Error(
+			w,
+			"If the email exists, a reset process has been started",
+			http.StatusOK,
+		)
 		return
 	}
 
-	resetToken := fmt.Sprintf("%d-%d", userID, time.Now().UnixNano())
+	resetToken := fmt.Sprintf(
+		"%d-%d",
+		userID,
+		time.Now().UnixNano(),
+	)
 
 	expiry := time.Now().Add(15 * time.Minute)
 
@@ -182,7 +248,11 @@ func (h *AuthHandler) ForgotPassword(w http.ResponseWriter, r *http.Request) {
 	)
 
 	if err != nil {
-		http.Error(w, "Could not create reset token", http.StatusInternalServerError)
+		http.Error(
+			w,
+			"Could not create reset token",
+			http.StatusInternalServerError,
+		)
 		return
 	}
 
@@ -202,8 +272,13 @@ func (h *AuthHandler) ResetPassword(w http.ResponseWriter, r *http.Request) {
 	}
 
 	err := json.NewDecoder(r.Body).Decode(&request)
+
 	if err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		http.Error(
+			w,
+			"Invalid request body",
+			http.StatusBadRequest,
+		)
 		return
 	}
 
@@ -218,13 +293,24 @@ func (h *AuthHandler) ResetPassword(w http.ResponseWriter, r *http.Request) {
 	).Scan(&userID)
 
 	if err != nil {
-		http.Error(w, "Invalid or expired reset token", http.StatusBadRequest)
+		http.Error(
+			w,
+			"Invalid or expired reset token",
+			http.StatusBadRequest,
+		)
 		return
 	}
 
-	hashedPassword, err := utils.HashPassword(request.NewPassword)
+	hashedPassword, err := utils.HashPassword(
+		request.NewPassword,
+	)
+
 	if err != nil {
-		http.Error(w, "Password hashing failed", http.StatusInternalServerError)
+		http.Error(
+			w,
+			"Password hashing failed",
+			http.StatusInternalServerError,
+		)
 		return
 	}
 
@@ -241,7 +327,11 @@ func (h *AuthHandler) ResetPassword(w http.ResponseWriter, r *http.Request) {
 	)
 
 	if err != nil {
-		http.Error(w, "Password reset failed", http.StatusInternalServerError)
+		http.Error(
+			w,
+			"Password reset failed",
+			http.StatusInternalServerError,
+		)
 		return
 	}
 
@@ -249,5 +339,15 @@ func (h *AuthHandler) ResetPassword(w http.ResponseWriter, r *http.Request) {
 
 	json.NewEncoder(w).Encode(map[string]string{
 		"message": "Password reset successful",
+	})
+}
+
+// Protected API
+func (h *AuthHandler) Profile(w http.ResponseWriter, r *http.Request) {
+
+	w.Header().Set("Content-Type", "application/json")
+
+	json.NewEncoder(w).Encode(map[string]string{
+		"message": "You accessed a protected API successfully",
 	})
 }
