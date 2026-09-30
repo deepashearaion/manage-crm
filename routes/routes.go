@@ -42,7 +42,7 @@ func SetupRoutes(
 	)
 
 	// =========================
-	// Protected APIs
+	// Protected Profile API
 	// =========================
 
 	http.HandleFunc(
@@ -51,11 +51,61 @@ func SetupRoutes(
 	)
 
 	// =========================
-	// Contact APIs
+	// Protected Contact APIs
 	// =========================
 
+	// Create a contact and get all contacts
 	http.HandleFunc(
 		"/api/contacts",
-		middleware.JWTValidation(contactHandler.CreateContact),
+		middleware.JWTValidation(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+
+				switch r.Method {
+
+				case http.MethodPost:
+					contactHandler.CreateContact(w, r)
+
+				case http.MethodGet:
+					contactHandler.GetContacts(w, r)
+
+				default:
+					w.Header().Set(
+						"Allow",
+						"GET, POST",
+					)
+
+					http.Error(
+						w,
+						"Method not allowed",
+						http.StatusMethodNotAllowed,
+					)
+				}
+			}),
+		),
+	)
+
+	// Get a contact by ID
+	http.HandleFunc(
+		"/api/contacts/",
+		middleware.JWTValidation(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+
+				if r.Method != http.MethodGet {
+					w.Header().Set(
+						"Allow",
+						"GET",
+					)
+
+					http.Error(
+						w,
+						"Method not allowed",
+						http.StatusMethodNotAllowed,
+					)
+					return
+				}
+
+				contactHandler.GetContactByID(w, r)
+			}),
+		),
 	)
 }
