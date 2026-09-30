@@ -16,26 +16,31 @@ func SetupRoutes(
 	// Public Authentication APIs
 	// =========================
 
+	// Register
 	http.HandleFunc(
 		"/api/auth/register",
 		authHandler.Register,
 	)
 
+	// Login
 	http.HandleFunc(
 		"/api/auth/login",
 		authHandler.Login,
 	)
 
+	// Logout
 	http.HandleFunc(
 		"/api/auth/logout",
 		authHandler.Logout,
 	)
 
+	// Forgot Password
 	http.HandleFunc(
 		"/api/auth/forgot-password",
 		authHandler.ForgotPassword,
 	)
 
+	// Reset Password
 	http.HandleFunc(
 		"/api/auth/reset-password",
 		authHandler.ResetPassword,
@@ -47,7 +52,9 @@ func SetupRoutes(
 
 	http.HandleFunc(
 		"/api/profile",
-		middleware.JWTValidation(authHandler.Profile),
+		middleware.JWTValidation(
+			authHandler.Profile,
+		),
 	)
 
 	// =========================
@@ -58,14 +65,19 @@ func SetupRoutes(
 	http.HandleFunc(
 		"/api/contacts",
 		middleware.JWTValidation(
-			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.HandlerFunc(func(
+				w http.ResponseWriter,
+				r *http.Request,
+			) {
 
 				switch r.Method {
 
 				case http.MethodPost:
+					// Create a new contact
 					contactHandler.CreateContact(w, r)
 
 				case http.MethodGet:
+					// Get all contacts
 					contactHandler.GetContacts(w, r)
 
 				default:
@@ -84,16 +96,32 @@ func SetupRoutes(
 		),
 	)
 
-	// Get a contact by ID
+	// =========================
+	// Get or Update Contact by ID
+	// =========================
+
 	http.HandleFunc(
 		"/api/contacts/",
 		middleware.JWTValidation(
-			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.HandlerFunc(func(
+				w http.ResponseWriter,
+				r *http.Request,
+			) {
 
-				if r.Method != http.MethodGet {
+				switch r.Method {
+
+				case http.MethodGet:
+					// Get contact by ID
+					contactHandler.GetContactByID(w, r)
+
+				case http.MethodPatch:
+					// Update contact by ID
+					contactHandler.UpdateContact(w, r)
+
+				default:
 					w.Header().Set(
 						"Allow",
-						"GET",
+						"GET, PATCH",
 					)
 
 					http.Error(
@@ -101,10 +129,7 @@ func SetupRoutes(
 						"Method not allowed",
 						http.StatusMethodNotAllowed,
 					)
-					return
 				}
-
-				contactHandler.GetContactByID(w, r)
 			}),
 		),
 	)
