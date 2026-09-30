@@ -97,7 +97,7 @@ func SetupRoutes(
 	)
 
 	// =========================
-	// Get or Update Contact by ID
+	// Get, Update or Delete Contact by ID
 	// =========================
 
 	http.HandleFunc(
@@ -118,10 +118,14 @@ func SetupRoutes(
 					// Update contact by ID
 					contactHandler.UpdateContact(w, r)
 
+				case http.MethodDelete:
+					// Delete contact by ID
+					contactHandler.DeleteContact(w, r)
+
 				default:
 					w.Header().Set(
 						"Allow",
-						"GET, PATCH",
+						"GET, PATCH, DELETE",
 					)
 
 					http.Error(

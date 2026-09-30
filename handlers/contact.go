@@ -467,3 +467,81 @@ func (h *ContactHandler) UpdateContact(
 		"contact": contact,
 	})
 }
+
+// =====================================
+// Delete a contact by ID
+// =====================================
+
+func (h *ContactHandler) DeleteContact(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	// Get contact ID from URL
+	idString := strings.TrimPrefix(
+		r.URL.Path,
+		"/api/contacts/",
+	)
+
+	// Validate contact ID
+	contactID, err := strconv.ParseInt(
+		idString,
+		10,
+		64,
+	)
+
+	if err != nil || contactID <= 0 {
+		http.Error(
+			w,
+			"Invalid contact ID",
+			http.StatusBadRequest,
+		)
+		return
+	}
+
+	// Delete contact from database
+	query := `
+		DELETE FROM contacts
+		WHERE id = $1
+	`
+
+	result, err := h.DB.Exec(
+		r.Context(),
+		query,
+		contactID,
+	)
+
+	if err != nil {
+		http.Error(
+			w,
+			"Failed to delete contact",
+			http.StatusInternalServerError,
+		)
+		return
+	}
+
+	// Check whether the contact existed
+	rowsAffected := result.RowsAffected()
+
+	if rowsAffected == 0 {
+		http.Error(
+			w,
+			"Contact not found",
+			http.StatusNotFound,
+		)
+		return
+	}
+
+	// Send success response
+	w.Header().Set(
+		"Content-Type",
+		"application/json",
+	)
+
+	w.WriteHeader(http.StatusOK)
+
+	json.NewEncoder(w).Encode(
+		map[string]interface{}{
+			"message": "Contact deleted successfully",
+		},
+	)
+}
