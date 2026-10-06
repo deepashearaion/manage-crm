@@ -29,11 +29,19 @@ func main() {
 		DB: conn,
 	}
 
-	routes.SetupRoutes(authHandler, contactHandler)
+	salesDashboardHandler := &handlers.SalesDashboardHandler{
+		DB: conn,
+	}
+
+	router := routes.SetupRoutes(
+		authHandler,
+		contactHandler,
+		salesDashboardHandler,
+	)
 
 	fmt.Println("Server running on http://localhost:8080")
 
-	err = http.ListenAndServe(":8080", nil)
+	err = http.ListenAndServe(":8080", router)
 
 	if err != nil {
 		log.Fatal("Server failed:", err)

@@ -5,136 +5,106 @@ import (
 
 	"authentication-backend/handlers"
 	"authentication-backend/middleware"
+
+	"github.com/gorilla/mux"
 )
 
 func SetupRoutes(
 	authHandler *handlers.AuthHandler,
 	contactHandler *handlers.ContactHandler,
-) {
+	salesDashboardHandler *handlers.SalesDashboardHandler,
+) *mux.Router {
+
+	router := mux.NewRouter()
 
 	// =========================
-	// Public Authentication APIs
+	// AUTHENTICATION ROUTES
 	// =========================
 
-	// Register
-	http.HandleFunc(
+	router.HandleFunc(
 		"/api/auth/register",
 		authHandler.Register,
-	)
+	).Methods(http.MethodPost)
 
-	// Login
-	http.HandleFunc(
+	router.HandleFunc(
 		"/api/auth/login",
 		authHandler.Login,
-	)
+	).Methods(http.MethodPost)
 
-	// Logout
-	http.HandleFunc(
+	router.HandleFunc(
 		"/api/auth/logout",
 		authHandler.Logout,
-	)
+	).Methods(http.MethodPost)
 
-	// Forgot Password
-	http.HandleFunc(
+	router.HandleFunc(
 		"/api/auth/forgot-password",
 		authHandler.ForgotPassword,
-	)
+	).Methods(http.MethodPost)
 
-	// Reset Password
-	http.HandleFunc(
+	router.HandleFunc(
 		"/api/auth/reset-password",
 		authHandler.ResetPassword,
-	)
+	).Methods(http.MethodPost)
 
 	// =========================
-	// Protected Profile API
+	// PROFILE ROUTE
 	// =========================
 
-	http.HandleFunc(
+	router.Handle(
 		"/api/profile",
 		middleware.JWTValidation(
-			authHandler.Profile,
+			http.HandlerFunc(authHandler.Profile),
 		),
-	)
+	).Methods(http.MethodGet)
 
 	// =========================
-	// Protected Contact APIs
+	// CONTACT ROUTES
 	// =========================
 
-	// Create a contact and get all contacts
-	http.HandleFunc(
+	// Get all contacts
+	router.Handle(
 		"/api/contacts",
 		middleware.JWTValidation(
-			http.HandlerFunc(func(
-				w http.ResponseWriter,
-				r *http.Request,
-			) {
-
-				switch r.Method {
-
-				case http.MethodPost:
-					// Create a new contact
-					contactHandler.CreateContact(w, r)
-
-				case http.MethodGet:
-					// Get all contacts
-					contactHandler.GetContacts(w, r)
-
-				default:
-					w.Header().Set(
-						"Allow",
-						"GET, POST",
-					)
-
-					http.Error(
-						w,
-						"Method not allowed",
-						http.StatusMethodNotAllowed,
-					)
-				}
-			}),
+			http.HandlerFunc(contactHandler.GetContacts),
 		),
-	)
+	).Methods(http.MethodGet)
 
-	// =========================
-	// Get, Update or Delete Contact by ID
-	// =========================
-
-	http.HandleFunc(
-		"/api/contacts/",
+	// Create contact
+	router.Handle(
+		"/api/contacts",
 		middleware.JWTValidation(
-			http.HandlerFunc(func(
-				w http.ResponseWriter,
-				r *http.Request,
-			) {
-
-				switch r.Method {
-
-				case http.MethodGet:
-					// Get contact by ID
-					contactHandler.GetContactByID(w, r)
-
-				case http.MethodPatch:
-					// Update contact by ID
-					contactHandler.UpdateContact(w, r)
-
-				case http.MethodDelete:
-					// Delete contact by ID
-					contactHandler.DeleteContact(w, r)
-
-				default:
-					w.Header().Set(
-						"Allow",
-						"GET, PATCH, DELETE",
-					)
-
-					http.Error(
-						w,
-						"Method not allowed",
-						http.StatusMethodNotAllowed,
-					)
-				}
-			}),
+			http.HandlerFunc(contactHandler.CreateContact),
 		),
-	)
+	).Methods(http.MethodPost)
+
+	// Update contact
+	router.Handle(
+		"/api/contacts/{id}",
+		middleware.JWTValidation(
+			http.HandlerFunc(contactHandler.UpdateContact),
+		),
+	).Methods(http.MethodPatch)
+
+	// Delete contact
+	router.Handle(
+		"/api/contacts/{id}",
+		middleware.JWTValidation(
+			http.HandlerFunc(contactHandler.DeleteContact),
+		),
+	).Methods(http.MethodDelete)
+
+	// =========================
+	// SALES DASHBOARD
+	// =========================
+
+	router.Handle(
+		"/api/dashboard/sales",
+		middleware.JWTValidation(
+			http.HandlerFunc(
+				salesDashboardHandler.GetSalesDashboard,
+			),
+		),
+	).Methods(http.MethodGet)
+
+	return router
 }
