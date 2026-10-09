@@ -1,21 +1,49 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"log"
 	"net/http"
+
+	"authentication-backend/database"
+	"authentication-backend/handlers"
+	"authentication-backend/routes"
 )
 
-func homeHandler(w http.ResponseWriter, r *http.Request) {
-	fmt.Fprintln(w, "Hello from Go!")
-}
-
 func main() {
-	http.HandleFunc("/", homeHandler)
 
-	fmt.Println("Server running at http://localhost:8080")
+	conn, err := database.Connect()
 
-	err := http.ListenAndServe(":8080", nil)
 	if err != nil {
-		fmt.Println(err)
+		log.Fatal("Database connection failed:", err)
+	}
+
+	defer conn.Close(context.Background())
+
+	authHandler := &handlers.AuthHandler{
+		DB: conn,
+	}
+
+	contactHandler := &handlers.ContactHandler{
+		DB: conn,
+	}
+
+	salesDashboardHandler := &handlers.SalesDashboardHandler{
+		DB: conn,
+	}
+
+	router := routes.SetupRoutes(
+		authHandler,
+		contactHandler,
+		salesDashboardHandler,
+	)
+
+	fmt.Println("Server running on http://localhost:8080")
+
+	err = http.ListenAndServe(":8080", router)
+
+	if err != nil {
+		log.Fatal("Server failed:", err)
 	}
 }
