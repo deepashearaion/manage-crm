@@ -12,15 +12,13 @@ import (
 func SetupRoutes(
 	authHandler *handlers.AuthHandler,
 	contactHandler *handlers.ContactHandler,
+	dealHandler *handlers.DealHandler,
 	salesDashboardHandler *handlers.SalesDashboardHandler,
 ) *mux.Router {
 
 	router := mux.NewRouter()
 
-	// =========================
-	// AUTHENTICATION ROUTES
-	// =========================
-
+	// Authentication routes
 	router.HandleFunc(
 		"/api/auth/register",
 		authHandler.Register,
@@ -46,10 +44,7 @@ func SetupRoutes(
 		authHandler.ResetPassword,
 	).Methods(http.MethodPost)
 
-	// =========================
-	// PROFILE ROUTE
-	// =========================
-
+	// Profile route
 	router.Handle(
 		"/api/profile",
 		middleware.JWTValidation(
@@ -57,11 +52,7 @@ func SetupRoutes(
 		),
 	).Methods(http.MethodGet)
 
-	// =========================
-	// CONTACT ROUTES
-	// =========================
-
-	// Get all contacts
+	// Contact routes
 	router.Handle(
 		"/api/contacts",
 		middleware.JWTValidation(
@@ -69,7 +60,6 @@ func SetupRoutes(
 		),
 	).Methods(http.MethodGet)
 
-	// Create contact
 	router.Handle(
 		"/api/contacts",
 		middleware.JWTValidation(
@@ -77,7 +67,6 @@ func SetupRoutes(
 		),
 	).Methods(http.MethodPost)
 
-	// Update contact
 	router.Handle(
 		"/api/contacts/{id}",
 		middleware.JWTValidation(
@@ -85,7 +74,6 @@ func SetupRoutes(
 		),
 	).Methods(http.MethodPatch)
 
-	// Delete contact
 	router.Handle(
 		"/api/contacts/{id}",
 		middleware.JWTValidation(
@@ -93,16 +81,33 @@ func SetupRoutes(
 		),
 	).Methods(http.MethodDelete)
 
-	// =========================
-	// SALES DASHBOARD
-	// =========================
+	// Deal routes
+	router.Handle(
+		"/api/deals",
+		middleware.JWTValidation(
+			http.HandlerFunc(dealHandler.GetDeals),
+		),
+	).Methods(http.MethodGet)
 
+	router.Handle(
+		"/api/deals",
+		middleware.JWTValidation(
+			http.HandlerFunc(dealHandler.CreateDeal),
+		),
+	).Methods(http.MethodPost)
+
+	router.Handle(
+		"/api/deals/{id}",
+		middleware.JWTValidation(
+			http.HandlerFunc(dealHandler.GetDealByID),
+		),
+	).Methods(http.MethodGet)
+
+	// Sales dashboard
 	router.Handle(
 		"/api/dashboard/sales",
 		middleware.JWTValidation(
-			http.HandlerFunc(
-				salesDashboardHandler.GetSalesDashboard,
-			),
+			http.HandlerFunc(salesDashboardHandler.GetSalesDashboard),
 		),
 	).Methods(http.MethodGet)
 

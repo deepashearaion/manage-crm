@@ -12,13 +12,10 @@ import (
 )
 
 func main() {
-
 	conn, err := database.Connect()
-
 	if err != nil {
 		log.Fatal("Database connection failed:", err)
 	}
-
 	defer conn.Close(context.Background())
 
 	authHandler := &handlers.AuthHandler{
@@ -29,6 +26,10 @@ func main() {
 		DB: conn,
 	}
 
+	dealHandler := &handlers.DealHandler{
+		DB: conn,
+	}
+
 	salesDashboardHandler := &handlers.SalesDashboardHandler{
 		DB: conn,
 	}
@@ -36,14 +37,13 @@ func main() {
 	router := routes.SetupRoutes(
 		authHandler,
 		contactHandler,
+		dealHandler,
 		salesDashboardHandler,
 	)
 
 	fmt.Println("Server running on http://localhost:8080")
 
-	err = http.ListenAndServe(":8080", router)
-
-	if err != nil {
+	if err := http.ListenAndServe(":8080", router); err != nil {
 		log.Fatal("Server failed:", err)
 	}
 }
