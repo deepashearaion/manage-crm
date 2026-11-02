@@ -1,3 +1,4 @@
+// Command api serves the CRM HTTP API.
 package main
 
 import (
