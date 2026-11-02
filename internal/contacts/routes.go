@@ -6,8 +6,6 @@ import (
 	"github.com/gorilla/mux"
 )
 
-
-
 // Routes registers the contact endpoints; every one requires a signed-in user.
 func Routes(r *mux.Router, h *Handler, requireUser func(http.Handler) http.Handler) {
 	r.Handle("/api/contacts", requireUser(http.HandlerFunc(h.List))).Methods(http.MethodGet)
