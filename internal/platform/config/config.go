@@ -11,6 +11,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/joho/godotenv"
 )
@@ -32,6 +33,13 @@ type Config struct {
 	DatabaseURL string // built from DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
 
 	JWTSecret []byte // JWT_SECRET, at least 32 bytes
+
+	AccessTokenTTL  time.Duration // ACCESS_TOKEN_TTL, default 15m, 1m to 24h
+	RefreshTokenTTL time.Duration // REFRESH_TOKEN_TTL, default 720h (30 days), 1h to 2160h (90 days)
+
+	// RefreshCookieSecure marks the refresh-token cookie Secure (HTTPS only).
+	// Off in development and test, where the API is served over plain HTTP.
+	RefreshCookieSecure bool
 
 	CORSAllowedOrigins []string // CORS_ALLOWED_ORIGINS, comma-separated
 	FrontendURL        string   // FRONTEND_URL, used to build links in emails
@@ -191,6 +199,22 @@ func FromEnv(getenv func(string) string) (*Config, error) {
 		// Without SMTP, password-reset emails could not be delivered.
 		errs = append(errs, errors.New("SMTP_HOST is required outside development"))
 	}
+
+	duration := func(key string, fallback, minimum, maximum time.Duration) time.Duration {
+		raw := get(key, "")
+		if raw == "" {
+			return fallback
+		}
+		d, err := time.ParseDuration(raw)
+		if err != nil || d < minimum || d > maximum {
+			errs = append(errs, fmt.Errorf("%s: %q must be a duration from %s to %s (e.g. 15m, 720h)", key, raw, minimum, maximum))
+			return fallback
+		}
+		return d
+	}
+	c.AccessTokenTTL = duration("ACCESS_TOKEN_TTL", 15*time.Minute, time.Minute, 24*time.Hour)
+	c.RefreshTokenTTL = duration("REFRESH_TOKEN_TTL", 30*24*time.Hour, time.Hour, 90*24*time.Hour)
+	c.RefreshCookieSecure = !c.IsDevelopment() && c.Env != EnvTest
 
 	if c.ReturnResetTokenInResponse && !c.IsDevelopment() {
 		errs = append(errs, fmt.Errorf("RETURN_RESET_TOKEN_IN_RESPONSE=true is only allowed when APP_ENV=development (APP_ENV is %q)", c.Env))

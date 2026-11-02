@@ -5,11 +5,11 @@ package app
 import (
 	"log/slog"
 	"net/http"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/deepashearaion/manage-crm/handlers"
+	"github.com/deepashearaion/manage-crm/internal/auth"
 	"github.com/deepashearaion/manage-crm/internal/platform/config"
 	"github.com/deepashearaion/manage-crm/internal/platform/httpx"
 	"github.com/deepashearaion/manage-crm/internal/platform/mail"
@@ -18,13 +18,7 @@ import (
 	"github.com/deepashearaion/manage-crm/utils"
 )
 
-const (
-	maxRequestBodyBytes = 1 << 20 // 1 MiB
-
-	// accessTokenTTL keeps the legacy 24h lifetime until short-lived access
-	// tokens with refresh-token rotation replace it.
-	accessTokenTTL = 24 * time.Hour
-)
+const maxRequestBodyBytes = 1 << 20 // 1 MiB
 
 type Deps struct {
 	Config *config.Config
@@ -35,14 +29,17 @@ type Deps struct {
 
 // NewHandler returns the complete HTTP stack: middleware plus all routes.
 func NewHandler(d Deps) http.Handler {
-	tokens := utils.NewJWT(d.Config.JWTSecret, accessTokenTTL)
+	tokens := utils.NewJWT(d.Config.JWTSecret, d.Config.AccessTokenTTL)
 
 	router := routes.SetupRoutes(
 		&handlers.AuthHandler{
 			DB:                         d.DB,
 			Tokens:                     tokens,
+			Sessions:                   &auth.Sessions{DB: d.DB, TTL: d.Config.RefreshTokenTTL},
 			Mailer:                     d.Mailer,
 			Logger:                     d.Logger,
+			AccessTokenTTL:             d.Config.AccessTokenTTL,
+			CookieSecure:               d.Config.RefreshCookieSecure,
 			FrontendURL:                d.Config.FrontendURL,
 			ReturnResetTokenInResponse: d.Config.ReturnResetTokenInResponse,
 		},

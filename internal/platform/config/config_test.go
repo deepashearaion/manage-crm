@@ -3,6 +3,7 @@ package config
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func envFrom(m map[string]string) func(string) string {
@@ -99,5 +100,37 @@ func TestFromEnvDevelopment(t *testing.T) {
 	}
 	if !c.ReturnResetTokenInResponse || c.SMTP.Enabled() || c.FrontendURL != "http://localhost:5173" || c.LogFormat != "text" {
 		t.Errorf("development config = %+v", c)
+	}
+}
+
+func TestTokenLifetimes(t *testing.T) {
+	c, err := FromEnv(envFrom(validEnv()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.AccessTokenTTL != 15*time.Minute || c.RefreshTokenTTL != 720*time.Hour || !c.RefreshCookieSecure {
+		t.Errorf("defaults: access=%s refresh=%s secure=%v", c.AccessTokenTTL, c.RefreshTokenTTL, c.RefreshCookieSecure)
+	}
+
+	env := validEnv()
+	env["APP_ENV"] = "development"
+	env["ACCESS_TOKEN_TTL"] = "24h"
+	env["REFRESH_TOKEN_TTL"] = "168h"
+	if c, err = FromEnv(envFrom(env)); err != nil {
+		t.Fatal(err)
+	}
+	if c.AccessTokenTTL != 24*time.Hour || c.RefreshTokenTTL != 168*time.Hour || c.RefreshCookieSecure {
+		t.Errorf("development: access=%s refresh=%s secure=%v", c.AccessTokenTTL, c.RefreshTokenTTL, c.RefreshCookieSecure)
+	}
+
+	for key, value := range map[string]string{
+		"ACCESS_TOKEN_TTL":  "25h",
+		"REFRESH_TOKEN_TTL": "30m",
+	} {
+		env := validEnv()
+		env[key] = value
+		if _, err := FromEnv(envFrom(env)); err == nil || !strings.Contains(err.Error(), key) {
+			t.Errorf("%s=%s: err = %v, want rejection", key, value, err)
+		}
 	}
 }

@@ -2,9 +2,6 @@ package handlers
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/deepashearaion/manage-crm/internal/auth"
 	"github.com/deepashearaion/manage-crm/internal/platform/mail"
 	"github.com/deepashearaion/manage-crm/utils"
 
@@ -30,11 +28,25 @@ const (
 	forgotPasswordMessage = "If an account exists for that email, a password reset link has been sent" //nolint:gosec // G101: a message, not a credential
 )
 
+// RefreshCookieName is the httpOnly cookie that carries the refresh token.
+// It is scoped to /api/auth so it is only sent to login, refresh and logout.
+const (
+	RefreshCookieName = "crm_refresh_token"
+	refreshCookiePath = "/api/auth"
+)
+
 type AuthHandler struct {
-	DB     *pgxpool.Pool
-	Tokens *utils.JWT
-	Mailer mail.Mailer
-	Logger *slog.Logger
+	DB       *pgxpool.Pool
+	Tokens   *utils.JWT
+	Sessions *auth.Sessions
+	Mailer   mail.Mailer
+	Logger   *slog.Logger
+
+	// AccessTokenTTL is reported to clients as expires_in.
+	AccessTokenTTL time.Duration
+
+	// CookieSecure marks the refresh cookie HTTPS-only (off for local HTTP).
+	CookieSecure bool
 
 	// FrontendURL is the base of the reset link sent by email.
 	FrontendURL string
@@ -225,21 +237,125 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	session, err := h.Sessions.Start(r.Context(), userID)
+
+	if err != nil {
+		h.Logger.ErrorContext(r.Context(), "login: start session", slog.Any("error", err))
+		http.Error(
+			w,
+			"Failed to generate token",
+			http.StatusInternalServerError,
+		)
+		return
+	}
+
+	h.setRefreshCookie(w, session)
+
 	w.Header().Set("Content-Type", "application/json")
 
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"message": "Login successful",
-		"user_id": userID,
-		"token":   token,
+		"message":    "Login successful",
+		"user_id":    userID,
+		"token":      token,
+		"expires_in": int(h.AccessTokenTTL.Seconds()),
 	})
 }
 
+// Refresh exchanges the refresh cookie for a new access token and rotates
+// the cookie. Reusing an already-rotated refresh token ends the session.
+func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
+
+	cookie, err := r.Cookie(RefreshCookieName)
+
+	if err != nil || cookie.Value == "" {
+		http.Error(
+			w,
+			"Invalid or expired refresh token",
+			http.StatusUnauthorized,
+		)
+		return
+	}
+
+	userID, session, err := h.Sessions.Rotate(r.Context(), cookie.Value)
+
+	if err != nil {
+		switch {
+		case errors.Is(err, auth.ErrRefreshTokenReused):
+			h.Logger.WarnContext(r.Context(), "refresh token reuse detected; session revoked", slog.Int64("user_id", userID))
+		case errors.Is(err, auth.ErrInvalidRefreshToken):
+		default:
+			h.Logger.ErrorContext(r.Context(), "refresh: rotate session", slog.Any("error", err))
+			http.Error(w, "Failed to refresh token", http.StatusInternalServerError)
+			return
+		}
+		h.clearRefreshCookie(w)
+		http.Error(
+			w,
+			"Invalid or expired refresh token",
+			http.StatusUnauthorized,
+		)
+		return
+	}
+
+	token, err := h.Tokens.Generate(userID)
+
+	if err != nil {
+		http.Error(w, "Failed to generate token", http.StatusInternalServerError)
+		return
+	}
+
+	h.setRefreshCookie(w, session)
+
+	w.Header().Set("Content-Type", "application/json")
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"user_id":    userID,
+		"token":      token,
+		"expires_in": int(h.AccessTokenTTL.Seconds()),
+	})
+}
+
+// Logout ends the session in the refresh cookie (if any) and clears it.
+// It always succeeds, so it is safe to call more than once.
 func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
+
+	if cookie, err := r.Cookie(RefreshCookieName); err == nil && cookie.Value != "" {
+		if err := h.Sessions.Revoke(r.Context(), cookie.Value); err != nil {
+			h.Logger.ErrorContext(r.Context(), "logout: revoke session", slog.Any("error", err))
+		}
+	}
+
+	h.clearRefreshCookie(w)
 
 	w.Header().Set("Content-Type", "application/json")
 
 	json.NewEncoder(w).Encode(map[string]string{
 		"message": "Logout successful",
+	})
+}
+
+func (h *AuthHandler) setRefreshCookie(w http.ResponseWriter, session auth.RefreshToken) {
+	http.SetCookie(w, &http.Cookie{ //nolint:gosec // G124: Secure comes from config (off only for local HTTP); HttpOnly and SameSite are set
+		Name:     RefreshCookieName,
+		Value:    session.Token,
+		Path:     refreshCookiePath,
+		Expires:  session.ExpiresAt,
+		MaxAge:   int(time.Until(session.ExpiresAt).Seconds()),
+		HttpOnly: true,
+		Secure:   h.CookieSecure,
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+func (h *AuthHandler) clearRefreshCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{ //nolint:gosec // G124: Secure comes from config (off only for local HTTP); HttpOnly and SameSite are set
+		Name:     RefreshCookieName,
+		Value:    "",
+		Path:     refreshCookiePath,
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   h.CookieSecure,
+		SameSite: http.SameSiteLaxMode,
 	})
 }
 
@@ -301,7 +417,7 @@ func (h *AuthHandler) startPasswordReset(ctx context.Context, email string) (str
 		return "", fmt.Errorf("look up user: %w", err)
 	}
 
-	token, tokenHash, err := newResetToken()
+	token, tokenHash, err := auth.NewOpaqueToken()
 	if err != nil {
 		return "", err
 	}
@@ -343,22 +459,6 @@ func (h *AuthHandler) startPasswordReset(ctx context.Context, email string) (str
 	}
 
 	return token, nil
-}
-
-// newResetToken returns a random URL-safe token and the SHA-256 hash that is
-// stored in its place.
-func newResetToken() (string, []byte, error) {
-	raw := make([]byte, 32)
-	if _, err := rand.Read(raw); err != nil {
-		return "", nil, err
-	}
-	token := base64.RawURLEncoding.EncodeToString(raw)
-	return token, hashResetToken(token), nil
-}
-
-func hashResetToken(token string) []byte {
-	sum := sha256.Sum256([]byte(token))
-	return sum[:]
 }
 
 func (h *AuthHandler) ResetPassword(w http.ResponseWriter, r *http.Request) {
@@ -408,7 +508,7 @@ func (h *AuthHandler) ResetPassword(w http.ResponseWriter, r *http.Request) {
 			`UPDATE password_reset_tokens SET used_at = now()
 			WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now()
 			RETURNING user_id`,
-			hashResetToken(request.Token),
+			auth.HashToken(request.Token),
 		).Scan(&userID)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return errInvalidToken
@@ -429,13 +529,17 @@ func (h *AuthHandler) ResetPassword(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 
-		_, err = tx.Exec(
+		if _, err := tx.Exec(
 			r.Context(),
 			`UPDATE password_reset_tokens SET used_at = now()
 			WHERE user_id = $1 AND used_at IS NULL`,
 			userID,
-		)
-		return err
+		); err != nil {
+			return err
+		}
+
+		// Sign out every session: whoever held the old password is locked out.
+		return auth.RevokeAll(r.Context(), tx, userID)
 	})
 
 	if errors.Is(err, errInvalidToken) {

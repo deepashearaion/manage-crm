@@ -39,6 +39,11 @@ func SetupRoutes(
 	).Methods(http.MethodPost)
 
 	router.HandleFunc(
+		"/api/auth/refresh",
+		authHandler.Refresh,
+	).Methods(http.MethodPost)
+
+	router.HandleFunc(
 		"/api/auth/forgot-password",
 		authHandler.ForgotPassword,
 	).Methods(http.MethodPost)

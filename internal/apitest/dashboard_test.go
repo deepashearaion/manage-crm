@@ -63,6 +63,9 @@ func TestCORS(t *testing.T) {
 	if got := res.Header().Get("Access-Control-Allow-Headers"); got != "Content-Type, Authorization" {
 		t.Errorf("Allow-Headers = %q", got)
 	}
+	if got := res.Header().Get("Access-Control-Allow-Credentials"); got != "true" {
+		t.Errorf("Allow-Credentials = %q, want true (refresh cookie)", got)
+	}
 
 	res = preflight("http://evil.example")
 	if res.Code != http.StatusNoContent {

@@ -6,6 +6,7 @@ package apitest
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -199,3 +200,21 @@ func (m *captureMailer) messages() []mail.Message {
 }
 
 type httpResult = httptest.ResponseRecorder
+
+// decodeJWTClaims returns a JWT's claims without verifying it.
+func decodeJWTClaims(t *testing.T, token string) map[string]any {
+	t.Helper()
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		t.Fatalf("not a JWT: %q", token)
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var claims map[string]any
+	if err := json.Unmarshal(raw, &claims); err != nil {
+		t.Fatal(err)
+	}
+	return claims
+}
