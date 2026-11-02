@@ -12,7 +12,6 @@ import (
 
 func SetupRoutes(
 	authHandler *handlers.AuthHandler,
-	salesDashboardHandler *handlers.SalesDashboardHandler,
 	tokens *utils.JWT,
 ) *mux.Router {
 
@@ -61,20 +60,6 @@ func SetupRoutes(
 		middleware.JWTValidation(
 			tokens,
 			http.HandlerFunc(authHandler.Profile),
-		),
-	).Methods(http.MethodGet)
-
-	// =========================
-	// SALES DASHBOARD
-	// =========================
-
-	router.Handle(
-		"/api/dashboard/sales",
-		middleware.JWTValidation(
-			tokens,
-			http.HandlerFunc(
-				salesDashboardHandler.GetSalesDashboard,
-			),
 		),
 	).Methods(http.MethodGet)
 

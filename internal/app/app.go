@@ -14,6 +14,7 @@ import (
 	"github.com/deepashearaion/manage-crm/internal/platform/config"
 	"github.com/deepashearaion/manage-crm/internal/platform/httpx"
 	"github.com/deepashearaion/manage-crm/internal/platform/mail"
+	"github.com/deepashearaion/manage-crm/internal/reports"
 	"github.com/deepashearaion/manage-crm/middleware"
 	"github.com/deepashearaion/manage-crm/routes"
 	"github.com/deepashearaion/manage-crm/utils"
@@ -44,7 +45,6 @@ func NewHandler(d Deps) http.Handler {
 			FrontendURL:                d.Config.FrontendURL,
 			ReturnResetTokenInResponse: d.Config.ReturnResetTokenInResponse,
 		},
-		&handlers.SalesDashboardHandler{DB: d.DB},
 		tokens,
 	)
 
@@ -54,6 +54,9 @@ func NewHandler(d Deps) http.Handler {
 
 	contacts.Routes(router,
 		contacts.NewHandler(contacts.NewService(contacts.NewRepository(d.DB)), d.Logger),
+		requireUser)
+	reports.Routes(router,
+		reports.NewHandler(reports.NewService(reports.NewRepository(d.DB)), d.Logger),
 		requireUser)
 
 	return httpx.Chain(router,
