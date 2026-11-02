@@ -18,6 +18,7 @@ type User struct {
 	Name         string
 	Email        string
 	PasswordHash string
+	CreatedAt    time.Time
 }
 
 // Principal is the caller identity a user's access token carries.
@@ -57,5 +58,8 @@ var (
 	// session has been revoked because the token was probably stolen.
 	ErrRefreshTokenReused = errors.New("refresh token reused")
 
-	errUserNotFound = errors.New("user not found")
+	ErrUserNotFound = errors.New("user not found")
+	ErrForbidden    = errors.New("not allowed")
+	ErrInvalidRole  = errors.New("invalid role")
+	ErrLastOwner    = errors.New("an organization must keep at least one owner")
 )

@@ -43,7 +43,7 @@ func NewHandler(d Deps) http.Handler {
 	auth.Routes(router, auth.NewHandler(authService, d.Logger, auth.HandlerSettings{
 		CookieSecure:               cfg.RefreshCookieSecure,
 		ReturnResetTokenInResponse: cfg.ReturnResetTokenInResponse,
-	}), requireUser)
+	}), tokens)
 
 	contacts.Routes(router,
 		contacts.NewHandler(contacts.NewService(contacts.NewRepository(d.DB)), d.Logger),

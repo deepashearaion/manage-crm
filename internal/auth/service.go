@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/deepashearaion/manage-crm/internal/platform/mail"
+	"github.com/deepashearaion/manage-crm/internal/platform/principal"
 	"github.com/deepashearaion/manage-crm/internal/platform/validate"
 )
 
@@ -57,7 +58,7 @@ func (s *Service) Register(ctx context.Context, name, email, password, orgName s
 	if err == nil {
 		return 0, ErrEmailTaken
 	}
-	if !errors.Is(err, errUserNotFound) {
+	if !errors.Is(err, ErrUserNotFound) {
 		return 0, fmt.Errorf("look up email: %w", err)
 	}
 
@@ -75,7 +76,7 @@ func (s *Service) Register(ctx context.Context, name, email, password, orgName s
 // Login checks credentials and starts a session.
 func (s *Service) Login(ctx context.Context, email, password string) (Session, error) {
 	user, err := s.repo.UserByEmail(ctx, validate.NormalizeEmail(email))
-	if errors.Is(err, errUserNotFound) {
+	if errors.Is(err, ErrUserNotFound) {
 		return Session{}, ErrInvalidCredentials
 	}
 	if err != nil {
@@ -133,7 +134,7 @@ func (s *Service) Logout(ctx context.Context, refreshToken string) error {
 // in development; errors only occur for existing accounts.
 func (s *Service) ForgotPassword(ctx context.Context, email string) (string, error) {
 	user, err := s.repo.UserByEmail(ctx, validate.NormalizeEmail(email))
-	if errors.Is(err, errUserNotFound) {
+	if errors.Is(err, ErrUserNotFound) {
 		return "", nil
 	}
 	if err != nil {
@@ -185,4 +186,89 @@ func (s *Service) session(user User, refresh RefreshToken) (Session, error) {
 		return Session{}, fmt.Errorf("generate access token: %w", err)
 	}
 	return Session{UserID: user.ID, AccessToken: access, RefreshToken: refresh}, nil
+}
+
+// inviteTTL is how long an invited user's set-password link works.
+const inviteTTL = 72 * time.Hour
+
+// unusablePasswordHash is stored for invited users until they set a
+// password; no password matches it.
+const unusablePasswordHash = "!"
+
+// ErrInviteNotSent means the user was created but the invite email failed;
+// an admin can resend it later (or the user can use "forgot password").
+var ErrInviteNotSent = errors.New("invite email not sent")
+
+// ListUsers returns the caller's org's users. Every role may list them, so
+// owner pickers can show names.
+func (s *Service) ListUsers(ctx context.Context, p principal.Principal) ([]User, error) {
+	return s.repo.UsersInOrg(ctx, p.OrgID)
+}
+
+// InviteUser adds a user to the caller's org with no usable password and
+// emails a link to set one. Only owners and admins may invite, and only
+// owners may create owners.
+func (s *Service) InviteUser(ctx context.Context, p principal.Principal, name, email string, role principal.Role) (User, error) {
+	if !p.ManagesUsers() {
+		return User{}, ErrForbidden
+	}
+	name = strings.TrimSpace(name)
+	email = validate.NormalizeEmail(email)
+	switch {
+	case name == "" || email == "":
+		return User{}, ErrMissingFields
+	case !validate.Email(email):
+		return User{}, ErrInvalidEmail
+	case !role.Valid():
+		return User{}, ErrInvalidRole
+	case role == principal.RoleOwner && p.Role != principal.RoleOwner:
+		return User{}, ErrForbidden
+	}
+
+	user, err := s.repo.CreateUser(ctx, User{OrgID: p.OrgID, Role: role, Name: name, Email: email, PasswordHash: unusablePasswordHash})
+	if err != nil {
+		return User{}, err
+	}
+
+	token, hash, err := NewOpaqueToken()
+	if err != nil {
+		return user, fmt.Errorf("%w: %w", ErrInviteNotSent, err)
+	}
+	if err := s.repo.ReplaceResetToken(ctx, user.ID, hash, inviteTTL); err != nil {
+		return user, fmt.Errorf("%w: store token: %w", ErrInviteNotSent, err)
+	}
+	link := s.settings.FrontendURL + "/reset-password?token=" + url.QueryEscape(token)
+	err = s.mailer.Send(ctx, mail.Message{
+		To:      user.Email,
+		Subject: "You have been invited to the CRM",
+		Text: fmt.Sprintf(
+			"Hi %s,\n\nAn account has been created for you. Open this link within %d hours to set your password:\n\n%s\n",
+			user.Name, int(inviteTTL.Hours()), link,
+		),
+	})
+	if err != nil {
+		return user, fmt.Errorf("%w: %w", ErrInviteNotSent, err)
+	}
+	return user, nil
+}
+
+// ChangeRole sets the role of a user in the caller's org. Only owners and
+// admins may change roles, only owners may grant or remove the owner role,
+// and the last owner cannot be demoted. The new role applies from the
+// user's next token refresh.
+func (s *Service) ChangeRole(ctx context.Context, p principal.Principal, userID int64, role principal.Role) (User, error) {
+	if !p.ManagesUsers() {
+		return User{}, ErrForbidden
+	}
+	if !role.Valid() {
+		return User{}, ErrInvalidRole
+	}
+	target, err := s.repo.UserInOrg(ctx, p.OrgID, userID)
+	if err != nil {
+		return User{}, err
+	}
+	if (target.Role == principal.RoleOwner || role == principal.RoleOwner) && p.Role != principal.RoleOwner {
+		return User{}, ErrForbidden
+	}
+	return s.repo.SetRole(ctx, p.OrgID, userID, role)
 }

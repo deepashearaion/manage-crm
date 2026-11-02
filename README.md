@@ -62,3 +62,20 @@ Modules never import each other (a test enforces this); they may import
 All settings come from environment variables (or `.env`); see `.env.example`.
 The server validates them at startup and refuses to start if any are missing
 or invalid. `APP_ENV` defaults to `production`.
+
+## API conventions
+
+- Legacy routes (`/api/auth/*`, `/api/contacts`, `/api/dashboard/sales`,
+  `/api/profile`) keep plain-text error bodies until the frontend moves off
+  them.
+- New routes live under `/api/v1` and return errors as RFC 7807
+  `application/problem+json` with a stable `code` (e.g. `forbidden`,
+  `validation_failed`, `email_taken`) and, for validation, per-field `errors`.
+  Request bodies are decoded strictly (unknown fields are rejected).
+- Every request is scoped to the caller's organization, taken from the
+  access token (never from the request). Roles: owner and admin can do
+  everything; manager everything except user management; rep only their own
+  records; viewer read-only.
+- Users join an org by invitation (`POST /api/v1/users`, owners/admins):
+  they get an email link to set their password. Self sign-up
+  (`POST /api/auth/register`) creates a new org with the user as owner.

@@ -23,13 +23,13 @@ func NewRepository(db *pgxpool.Pool) *Repository {
 	return &Repository{db: db}
 }
 
-const userColumns = `id, org_id, role, name, email, password_hash`
+const userColumns = `id, org_id, role, name, email, password_hash, created_at`
 
 func scanUser(row pgx.Row) (User, error) {
 	var u User
-	err := row.Scan(&u.ID, &u.OrgID, &u.Role, &u.Name, &u.Email, &u.PasswordHash)
+	err := row.Scan(&u.ID, &u.OrgID, &u.Role, &u.Name, &u.Email, &u.PasswordHash, &u.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return User{}, errUserNotFound
+		return User{}, ErrUserNotFound
 	}
 	return u, err
 }
@@ -234,4 +234,64 @@ func insertRefreshToken(ctx context.Context, db queryRower, userID int64, family
 		userID, family, tokenHash, ttl.Seconds(),
 	).Scan(&expiresAt)
 	return expiresAt, err
+}
+
+// UsersInOrg lists an org's users, oldest first.
+func (r *Repository) UsersInOrg(ctx context.Context, orgID int64) ([]User, error) {
+	rows, err := r.db.Query(ctx, `SELECT `+userColumns+` FROM users WHERE org_id = $1 ORDER BY id`, orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	users := make([]User, 0)
+	for rows.Next() {
+		u, err := scanUser(rows)
+		if err != nil {
+			return nil, err
+		}
+		users = append(users, u)
+	}
+	return users, rows.Err()
+}
+
+// UserInOrg returns a user of orgID, or ErrUserNotFound.
+func (r *Repository) UserInOrg(ctx context.Context, orgID, userID int64) (User, error) {
+	return scanUser(r.db.QueryRow(ctx, `SELECT `+userColumns+` FROM users WHERE org_id = $1 AND id = $2`, orgID, userID))
+}
+
+// SetRole changes a user's role within orgID. Demoting the org's only owner
+// returns ErrLastOwner; the org's owners are locked so two demotions cannot
+// race past the check.
+func (r *Repository) SetRole(ctx context.Context, orgID, userID int64, role principal.Role) (User, error) {
+	var updated User
+	err := pgx.BeginFunc(ctx, r.db, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT id FROM users WHERE org_id = $1 AND role = 'owner' FOR UPDATE`, orgID)
+		if err != nil {
+			return err
+		}
+		owners := map[int64]bool{}
+		for rows.Next() {
+			var id int64
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return err
+			}
+			owners[id] = true
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		if owners[userID] && role != principal.RoleOwner && len(owners) == 1 {
+			return ErrLastOwner
+		}
+
+		updated, err = scanUser(tx.QueryRow(ctx,
+			`UPDATE users SET role = $3, updated_at = now() WHERE org_id = $1 AND id = $2 RETURNING `+userColumns,
+			orgID, userID, role,
+		))
+		return err
+	})
+	return updated, err
 }
