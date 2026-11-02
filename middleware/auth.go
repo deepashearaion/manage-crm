@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/deepashearaion/manage-crm/internal/platform/principal"
 	"github.com/deepashearaion/manage-crm/utils"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -90,6 +91,8 @@ func JWTValidation(tokens *utils.JWT, next http.HandlerFunc) http.HandlerFunc {
 			UserIDKey,
 			userID,
 		)
+
+		ctx = principal.With(ctx, principal.Principal{UserID: userID})
 
 		r = r.WithContext(ctx)
 

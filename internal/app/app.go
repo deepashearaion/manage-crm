@@ -10,6 +10,7 @@ import (
 
 	"github.com/deepashearaion/manage-crm/handlers"
 	"github.com/deepashearaion/manage-crm/internal/auth"
+	"github.com/deepashearaion/manage-crm/internal/contacts"
 	"github.com/deepashearaion/manage-crm/internal/platform/config"
 	"github.com/deepashearaion/manage-crm/internal/platform/httpx"
 	"github.com/deepashearaion/manage-crm/internal/platform/mail"
@@ -43,16 +44,23 @@ func NewHandler(d Deps) http.Handler {
 			FrontendURL:                d.Config.FrontendURL,
 			ReturnResetTokenInResponse: d.Config.ReturnResetTokenInResponse,
 		},
-		&handlers.ContactHandler{DB: d.DB},
 		&handlers.SalesDashboardHandler{DB: d.DB},
 		tokens,
 	)
+
+	requireUser := func(next http.Handler) http.Handler {
+		return middleware.JWTValidation(tokens, next.ServeHTTP)
+	}
+
+	contacts.Routes(router,
+		contacts.NewHandler(contacts.NewService(contacts.NewRepository(d.DB)), d.Logger),
+		requireUser)
 
 	return httpx.Chain(router,
 		httpx.RequestID,
 		httpx.AccessLog(d.Logger),
 		httpx.Recover(d.Logger),
-		func(h http.Handler) http.Handler { return middleware.CORS(d.Config.CORSAllowedOrigins, h) },
+		httpx.CORS(d.Config.CORSAllowedOrigins),
 		httpx.MaxBodyBytes(maxRequestBodyBytes),
 	)
 }

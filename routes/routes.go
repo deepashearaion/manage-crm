@@ -12,7 +12,6 @@ import (
 
 func SetupRoutes(
 	authHandler *handlers.AuthHandler,
-	contactHandler *handlers.ContactHandler,
 	salesDashboardHandler *handlers.SalesDashboardHandler,
 	tokens *utils.JWT,
 ) *mux.Router {
@@ -64,55 +63,6 @@ func SetupRoutes(
 			http.HandlerFunc(authHandler.Profile),
 		),
 	).Methods(http.MethodGet)
-
-	// =========================
-	// CONTACT ROUTES
-	// =========================
-
-	// Get all contacts
-	router.Handle(
-		"/api/contacts",
-		middleware.JWTValidation(
-			tokens,
-			http.HandlerFunc(contactHandler.GetContacts),
-		),
-	).Methods(http.MethodGet)
-
-	// Create contact
-	router.Handle(
-		"/api/contacts",
-		middleware.JWTValidation(
-			tokens,
-			http.HandlerFunc(contactHandler.CreateContact),
-		),
-	).Methods(http.MethodPost)
-
-	// Get contact by ID
-	router.Handle(
-		"/api/contacts/{id}",
-		middleware.JWTValidation(
-			tokens,
-			http.HandlerFunc(contactHandler.GetContactByID),
-		),
-	).Methods(http.MethodGet)
-
-	// Update contact
-	router.Handle(
-		"/api/contacts/{id}",
-		middleware.JWTValidation(
-			tokens,
-			http.HandlerFunc(contactHandler.UpdateContact),
-		),
-	).Methods(http.MethodPatch)
-
-	// Delete contact
-	router.Handle(
-		"/api/contacts/{id}",
-		middleware.JWTValidation(
-			tokens,
-			http.HandlerFunc(contactHandler.DeleteContact),
-		),
-	).Methods(http.MethodDelete)
 
 	// =========================
 	// SALES DASHBOARD
