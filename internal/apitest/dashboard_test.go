@@ -72,3 +72,19 @@ func TestCORS(t *testing.T) {
 		t.Errorf("Allow-Origin for unknown origin = %q, want none", got)
 	}
 }
+
+// "New customers" counts contacts created since midnight IST, independent of
+// the session (UTC) and server time zones.
+func TestSalesDashboardTodayIsIST(t *testing.T) {
+	s := newServer(t)
+	_, token := s.userToken()
+
+	s.exec(`INSERT INTO contacts (first_name, created_at) VALUES
+		('just after IST midnight',  date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata' + interval '1 minute'),
+		('just before IST midnight', date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata' - interval '1 minute')`)
+
+	got := wantJSON(t, s.do("GET", "/api/dashboard/sales", nil, token), http.StatusOK)
+	if got["total_new_customers"] != float64(1) {
+		t.Errorf("total_new_customers = %v, want 1", got["total_new_customers"])
+	}
+}

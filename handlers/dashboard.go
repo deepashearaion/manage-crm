@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 
@@ -24,7 +23,7 @@ type SalesDashboardResponse struct {
 
 func (h *SalesDashboardHandler) GetSalesDashboard(w http.ResponseWriter, r *http.Request) {
 
-	ctx := context.Background()
+	ctx := r.Context()
 
 	var response SalesDashboardResponse
 
@@ -54,7 +53,8 @@ func (h *SalesDashboardHandler) GetSalesDashboard(w http.ResponseWriter, r *http
 			(
 				SELECT COUNT(*)
 				FROM contacts
-				WHERE created_at >= CURRENT_DATE
+				-- "today" is the current day in IST, whatever the session time zone
+				WHERE created_at >= date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata'
 			),
 			COALESCE(SUM(d.annual_recurring_revenue), 0),
 			COALESCE(SUM(d.monthly_recurring_revenue), 0)
