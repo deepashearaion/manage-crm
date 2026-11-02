@@ -12,6 +12,7 @@ import (
 	"authentication-backend/handlers"
 	"authentication-backend/internal/platform/config"
 	"authentication-backend/internal/platform/httpx"
+	"authentication-backend/internal/platform/mail"
 	"authentication-backend/middleware"
 	"authentication-backend/routes"
 	"authentication-backend/utils"
@@ -29,6 +30,7 @@ type Deps struct {
 	Config *config.Config
 	DB     *pgxpool.Pool
 	Logger *slog.Logger
+	Mailer mail.Mailer
 }
 
 // NewHandler returns the complete HTTP stack: middleware plus all routes.
@@ -36,7 +38,14 @@ func NewHandler(d Deps) http.Handler {
 	tokens := utils.NewJWT(d.Config.JWTSecret, accessTokenTTL)
 
 	router := routes.SetupRoutes(
-		&handlers.AuthHandler{DB: d.DB, Tokens: tokens},
+		&handlers.AuthHandler{
+			DB:                         d.DB,
+			Tokens:                     tokens,
+			Mailer:                     d.Mailer,
+			Logger:                     d.Logger,
+			FrontendURL:                d.Config.FrontendURL,
+			ReturnResetTokenInResponse: d.Config.ReturnResetTokenInResponse,
+		},
 		&handlers.ContactHandler{DB: d.DB},
 		&handlers.SalesDashboardHandler{DB: d.DB},
 		tokens,

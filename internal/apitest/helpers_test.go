@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -17,14 +18,16 @@ import (
 	"authentication-backend/internal/app"
 	"authentication-backend/internal/platform/config"
 	"authentication-backend/internal/platform/logging"
+	"authentication-backend/internal/platform/mail"
 	"authentication-backend/internal/testutil"
 )
 
 type server struct {
-	t   *testing.T
-	h   http.Handler
-	db  *pgxpool.Pool
-	cfg *config.Config
+	t    *testing.T
+	h    http.Handler
+	db   *pgxpool.Pool
+	cfg  *config.Config
+	mail *captureMailer
 }
 
 // testEnv is the configuration the API tests run with; tests may override
@@ -52,12 +55,14 @@ func newServerWith(t *testing.T, env map[string]string) *server {
 		t.Fatal(err)
 	}
 	db := testutil.Pool(t)
+	mailer := &captureMailer{}
 	h := app.NewHandler(app.Deps{
 		Config: cfg,
 		DB:     db,
 		Logger: logging.New(testWriter{t}, "text", "warn"),
+		Mailer: mailer,
 	})
-	return &server{t: t, h: h, db: db, cfg: cfg}
+	return &server{t: t, h: h, db: db, cfg: cfg, mail: mailer}
 }
 
 // testWriter sends log output to the test log, shown only for failing tests.
@@ -173,3 +178,24 @@ func decode(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
 	}
 	return out
 }
+
+// captureMailer records emails instead of sending them.
+type captureMailer struct {
+	mu   sync.Mutex
+	sent []mail.Message
+}
+
+func (m *captureMailer) Send(_ context.Context, msg mail.Message) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.sent = append(m.sent, msg)
+	return nil
+}
+
+func (m *captureMailer) messages() []mail.Message {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]mail.Message(nil), m.sent...)
+}
+
+type httpResult = httptest.ResponseRecorder

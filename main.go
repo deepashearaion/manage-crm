@@ -14,6 +14,7 @@ import (
 	"authentication-backend/internal/platform/database"
 	"authentication-backend/internal/platform/httpx"
 	"authentication-backend/internal/platform/logging"
+	"authentication-backend/internal/platform/mail"
 )
 
 func main() {
@@ -40,8 +41,24 @@ func run() error {
 	}
 	defer db.Close()
 
-	handler := app.NewHandler(app.Deps{Config: cfg, DB: db, Logger: logger})
+	var sender mail.Mailer = mail.Log{Logger: logger} // development only; config requires SMTP elsewhere
+	if cfg.SMTP.Enabled() {
+		sender = mail.NewSMTP(mail.SMTPConfig{
+			Host: cfg.SMTP.Host,
+			Port: cfg.SMTP.Port,
+			User: cfg.SMTP.User,
+			Pass: cfg.SMTP.Pass,
+			From: cfg.SMTP.From,
+		})
+	}
+	mailer := mail.NewAsync(sender, logger, 30*time.Second)
+	defer mailer.Wait() // let queued emails finish after the server stops
 
-	logger.Info("starting", slog.String("env", cfg.Env))
+	handler := app.NewHandler(app.Deps{Config: cfg, DB: db, Logger: logger, Mailer: mailer})
+
+	logger.Info("starting", slog.String("env", cfg.Env), slog.Bool("smtp", cfg.SMTP.Enabled()))
+	if cfg.ReturnResetTokenInResponse {
+		logger.Warn("RETURN_RESET_TOKEN_IN_RESPONSE is on: forgot-password responses include the reset token")
+	}
 	return httpx.Serve(ctx, ":"+cfg.Port, handler, logger, 15*time.Second)
 }

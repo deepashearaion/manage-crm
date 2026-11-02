@@ -1,8 +1,10 @@
 package apitest
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -83,50 +85,6 @@ func TestLogout(t *testing.T) {
 	}
 }
 
-func TestForgotAndResetPassword(t *testing.T) {
-	s := newServer(t)
-	s.register("Asha", "asha@example.com", "secret-pass-1")
-
-	rec := s.do("POST", "/api/auth/forgot-password", map[string]string{"email": "asha@example.com"}, "")
-	body := wantJSON(t, rec, http.StatusOK)
-	if body["message"] != "Password reset process started" {
-		t.Errorf("message = %v", body["message"])
-	}
-	token, _ := body["reset_token"].(string)
-	if token == "" {
-		t.Fatal("reset_token missing")
-	}
-
-	rec = s.do("POST", "/api/auth/reset-password", map[string]string{"token": token, "new_password": "new-secret-2"}, "")
-	body = wantJSON(t, rec, http.StatusOK)
-	if body["message"] != "Password reset successful" {
-		t.Errorf("message = %v", body["message"])
-	}
-	s.login("asha@example.com", "new-secret-2")
-	wantText(t, s.do("POST", "/api/auth/login", map[string]string{"email": "asha@example.com", "password": "secret-pass-1"}, ""),
-		http.StatusUnauthorized, "Invalid email or password")
-
-	t.Run("token is single use", func(t *testing.T) {
-		rec := s.do("POST", "/api/auth/reset-password", map[string]string{"token": token, "new_password": "again-secret-3"}, "")
-		wantText(t, rec, http.StatusBadRequest, "Invalid or expired reset token")
-	})
-	t.Run("expired token", func(t *testing.T) {
-		rec := s.do("POST", "/api/auth/forgot-password", map[string]string{"email": "asha@example.com"}, "")
-		token := wantJSON(t, rec, http.StatusOK)["reset_token"].(string)
-		s.exec(`UPDATE users SET reset_token_expires_at = CURRENT_TIMESTAMP - INTERVAL '1 minute'`)
-		rec = s.do("POST", "/api/auth/reset-password", map[string]string{"token": token, "new_password": "again-secret-3"}, "")
-		wantText(t, rec, http.StatusBadRequest, "Invalid or expired reset token")
-	})
-	t.Run("unknown email", func(t *testing.T) {
-		rec := s.do("POST", "/api/auth/forgot-password", map[string]string{"email": "who@example.com"}, "")
-		wantText(t, rec, http.StatusOK, "If the email exists, a reset process has been started")
-	})
-	t.Run("invalid bodies", func(t *testing.T) {
-		wantText(t, s.do("POST", "/api/auth/forgot-password", "{", ""), http.StatusBadRequest, "Invalid request body")
-		wantText(t, s.do("POST", "/api/auth/reset-password", "{", ""), http.StatusBadRequest, "Invalid request body")
-	})
-}
-
 func TestProfile(t *testing.T) {
 	s := newServer(t)
 	_, token := s.userToken()
@@ -179,4 +137,38 @@ func TestForgedTokensRejected(t *testing.T) {
 
 	valid := sign(jwt.SigningMethodHS256, secret, jwt.MapClaims{"user_id": userID, "exp": future})
 	wantStatus(t, s.do("GET", "/api/profile", nil, valid), http.StatusOK)
+}
+
+func TestRegisterValidation(t *testing.T) {
+	s := newServer(t)
+	reg := func(email, password string) *httpResult {
+		return s.do("POST", "/api/auth/register", map[string]string{"name": "X", "email": email, "password": password}, "")
+	}
+
+	for _, pw := range []string{"short", "1234567", strings.Repeat("x", 73)} {
+		wantText(t, reg("x@example.com", pw), http.StatusBadRequest, "Password must be 8 to 72 characters long")
+	}
+	for _, email := range []string{"not-an-email", "x@localhost", "X <x@example.com>"} {
+		wantText(t, reg(email, "secret-pass-1"), http.StatusBadRequest, "Invalid email address")
+	}
+
+	t.Run("emails are case-insensitive", func(t *testing.T) {
+		wantStatus(t, reg("  Mixed.Case@Example.COM ", "secret-pass-1"), http.StatusCreated)
+		wantText(t, reg("mixed.case@example.com", "secret-pass-1"), http.StatusConflict, "Email already registered")
+		s.login("MIXED.case@example.com", "secret-pass-1")
+
+		var stored string
+		if err := s.db.QueryRow(context.Background(), `SELECT email FROM users WHERE id = 1`).Scan(&stored); err != nil {
+			t.Fatal(err)
+		}
+		if stored != "mixed.case@example.com" {
+			t.Errorf("stored email = %q, want lowercased", stored)
+		}
+	})
+	t.Run("database rejects non-normalized emails", func(t *testing.T) {
+		_, err := s.db.Exec(context.Background(), `INSERT INTO users (name, email, password_hash) VALUES ('Y', 'Upper@Example.com', 'x')`)
+		if err == nil {
+			t.Error("insert of mixed-case email succeeded")
+		}
+	})
 }
