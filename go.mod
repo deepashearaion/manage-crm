@@ -1,4 +1,4 @@
-module authentication-backend
+module github.com/deepashearaion/manage-crm
 
 go 1.26.5
 

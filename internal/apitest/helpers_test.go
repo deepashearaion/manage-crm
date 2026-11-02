@@ -15,11 +15,11 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"authentication-backend/internal/app"
-	"authentication-backend/internal/platform/config"
-	"authentication-backend/internal/platform/logging"
-	"authentication-backend/internal/platform/mail"
-	"authentication-backend/internal/testutil"
+	"github.com/deepashearaion/manage-crm/internal/app"
+	"github.com/deepashearaion/manage-crm/internal/platform/config"
+	"github.com/deepashearaion/manage-crm/internal/platform/logging"
+	"github.com/deepashearaion/manage-crm/internal/platform/mail"
+	"github.com/deepashearaion/manage-crm/internal/testutil"
 )
 
 type server struct {

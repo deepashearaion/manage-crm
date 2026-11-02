@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strings"
 
-	"authentication-backend/utils"
+	"github.com/deepashearaion/manage-crm/utils"
 
 	"github.com/golang-jwt/jwt/v5"
 )

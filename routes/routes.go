@@ -3,9 +3,9 @@ package routes
 import (
 	"net/http"
 
-	"authentication-backend/handlers"
-	"authentication-backend/middleware"
-	"authentication-backend/utils"
+	"github.com/deepashearaion/manage-crm/handlers"
+	"github.com/deepashearaion/manage-crm/middleware"
+	"github.com/deepashearaion/manage-crm/utils"
 
 	"github.com/gorilla/mux"
 )

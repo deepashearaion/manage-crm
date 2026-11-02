@@ -10,8 +10,8 @@ import (
 	"log"
 	"os"
 
-	"authentication-backend/internal/platform/config"
-	"authentication-backend/migrations"
+	"github.com/deepashearaion/manage-crm/internal/platform/config"
+	"github.com/deepashearaion/manage-crm/migrations"
 )
 
 func main() {

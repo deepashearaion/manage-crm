@@ -9,13 +9,13 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"authentication-backend/handlers"
-	"authentication-backend/internal/platform/config"
-	"authentication-backend/internal/platform/httpx"
-	"authentication-backend/internal/platform/mail"
-	"authentication-backend/middleware"
-	"authentication-backend/routes"
-	"authentication-backend/utils"
+	"github.com/deepashearaion/manage-crm/handlers"
+	"github.com/deepashearaion/manage-crm/internal/platform/config"
+	"github.com/deepashearaion/manage-crm/internal/platform/httpx"
+	"github.com/deepashearaion/manage-crm/internal/platform/mail"
+	"github.com/deepashearaion/manage-crm/middleware"
+	"github.com/deepashearaion/manage-crm/routes"
+	"github.com/deepashearaion/manage-crm/utils"
 )
 
 const (

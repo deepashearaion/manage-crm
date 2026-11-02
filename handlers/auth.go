@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"authentication-backend/internal/platform/mail"
-	"authentication-backend/utils"
+	"github.com/deepashearaion/manage-crm/internal/platform/mail"
+	"github.com/deepashearaion/manage-crm/utils"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"

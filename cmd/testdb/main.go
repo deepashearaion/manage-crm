@@ -10,8 +10,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"authentication-backend/internal/testutil"
-	"authentication-backend/migrations"
+	"github.com/deepashearaion/manage-crm/internal/testutil"
+	"github.com/deepashearaion/manage-crm/migrations"
 )
 
 func main() {

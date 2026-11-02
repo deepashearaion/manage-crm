@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"authentication-backend/internal/platform/config"
+	"github.com/deepashearaion/manage-crm/internal/platform/config"
 )
 
 const forgotMessage = "If an account exists for that email, a password reset link has been sent"
