@@ -38,12 +38,24 @@ number, e.g. `migrations/00004_add_companies.sql`, containing
 cmd/api        HTTP server entry point
 cmd/migrate    migration runner
 cmd/testdb     test database setup
-internal/app   wires config, database and routes into the HTTP handler
-internal/platform/{config,database,httpx,logging,mail}  shared infrastructure
+internal/app   wires config, database and modules into the HTTP handler
+internal/<module>   one package per business module:
+    routes.go      endpoint registration
+    handler.go     HTTP decoding/encoding only
+    service.go     business rules
+    repository.go  SQL (the only place that touches the module's tables)
+    model.go       types and errors
+  auth       users, login, sessions (refresh tokens), password reset
+  contacts   contacts
+  reports    dashboards (read-only queries across modules' tables)
+internal/platform/{config,database,httpx,logging,mail,principal,validate}  shared infrastructure
 internal/apitest  black-box tests for the /api routes
-handlers, routes, middleware, models, utils  legacy code, moving into internal/<module>
 migrations     SQL migrations
 ```
+
+Modules never import each other (a test enforces this); they may import
+`internal/platform/*`. The authenticated caller reaches modules through
+`platform/principal`, set by `auth.RequireUser`.
 
 ## Configuration
 
