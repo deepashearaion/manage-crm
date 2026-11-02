@@ -8,6 +8,7 @@ import (
 
 	"authentication-backend/database"
 	"authentication-backend/handlers"
+	"authentication-backend/middleware"
 	"authentication-backend/routes"
 )
 
@@ -41,7 +42,7 @@ func main() {
 
 	fmt.Println("Server running on http://localhost:8080")
 
-	err = http.ListenAndServe(":8080", router)
+	err = http.ListenAndServe(":8080", middleware.CORS(router))
 
 	if err != nil {
 		log.Fatal("Server failed:", err)
