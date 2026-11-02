@@ -77,10 +77,14 @@ var shared struct {
 	err  error
 }
 
-// Pool returns a connection pool to the test database, emptied for the
-// calling test. One pool is shared by all tests in the binary: connecting is
-// slow on some machines, and tests using it must not run in parallel. The test
-// fails if TEST_DATABASE_URL is missing or unsafe.
+// dataLock is the advisory-lock key that serializes tests which modify data,
+// across all test binaries (go test runs packages in parallel).
+const dataLock = 7_340_001
+
+// Pool returns the connection pool to the test database, shared by all tests
+// in the binary because connecting is slow on some machines. Use it as is only
+// for read-only checks (such as the schema); tests that write data use
+// FreshDB. The test fails if TEST_DATABASE_URL is missing or unsafe.
 func Pool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	shared.once.Do(func() {
@@ -96,8 +100,30 @@ func Pool(t *testing.T) *pgxpool.Pool {
 	if shared.err != nil {
 		t.Fatalf("open test database pool: %v", shared.err)
 	}
-	pool := shared.pool
+	return shared.pool
+}
+
+// FreshDB gives the calling test exclusive use of an emptied test database:
+// it holds an advisory lock until the test ends, so tests that write data
+// never overlap, even across packages.
+func FreshDB(t *testing.T) *pgxpool.Pool {
+	t.Helper()
+	pool := Pool(t)
 	ctx := context.Background()
+
+	lockConn, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire lock connection: %v", err)
+	}
+	if _, err := lockConn.Exec(ctx, `SELECT pg_advisory_lock($1)`, dataLock); err != nil {
+		lockConn.Release()
+		t.Fatalf("lock test database: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = lockConn.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, dataLock)
+		lockConn.Release()
+	})
+
 	if err := Truncate(ctx, pool); err != nil {
 		t.Fatalf("truncate test database (run `make test-db` first?): %v", err)
 	}

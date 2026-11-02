@@ -54,7 +54,7 @@ func newServerWith(t *testing.T, env map[string]string) *server {
 	if err != nil {
 		t.Fatal(err)
 	}
-	db := testutil.Pool(t)
+	db := testutil.FreshDB(t)
 	mailer := &captureMailer{}
 	h := app.NewHandler(app.Deps{
 		Config: cfg,

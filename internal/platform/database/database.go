@@ -12,8 +12,9 @@ import (
 )
 
 // Open creates a connection pool for url and checks that the database is
-// reachable. A pool, unlike a single pgx.Conn, is safe for the concurrent use
-// that serving HTTP requests requires.
+// reachable before ctx is done; callers set the timeout. A pool, unlike a
+// single pgx.Conn, is safe for the concurrent use that serving HTTP requests
+// requires.
 //
 // Sessions run in UTC and timestamptz values are scanned as UTC, so behavior
 // and JSON output do not depend on the database server's or API host's time
@@ -29,9 +30,7 @@ func Open(ctx context.Context, url string) (*pgxpool.Pool, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open database pool: %w", err)
 	}
-	pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	if err := pool.Ping(pingCtx); err != nil {
+	if err := pool.Ping(ctx); err != nil {
 		pool.Close()
 		return nil, fmt.Errorf("ping database: %w", err)
 	}

@@ -36,7 +36,9 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	db, err := database.Open(ctx, cfg.DatabaseURL)
+	openCtx, cancelOpen := context.WithTimeout(ctx, 15*time.Second)
+	db, err := database.Open(openCtx, cfg.DatabaseURL)
+	cancelOpen()
 	if err != nil {
 		return err
 	}
