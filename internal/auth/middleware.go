@@ -48,8 +48,20 @@ func RequireUser(tokens *JWT) func(http.Handler) http.Handler {
 				http.Error(w, "Invalid user ID in token", http.StatusUnauthorized)
 				return
 			}
+			// Tokens issued before multi-tenancy carry no org or role and are
+			// rejected, so their holders sign in again.
+			orgID, okOrg := claims["org_id"].(float64)
+			role, okRole := claims["role"].(string)
+			if !okOrg || !okRole || orgID <= 0 || !principal.Role(role).Valid() {
+				http.Error(w, "Invalid token claims", http.StatusUnauthorized)
+				return
+			}
 
-			ctx := principal.With(r.Context(), principal.Principal{UserID: int64(userID)})
+			ctx := principal.With(r.Context(), principal.Principal{
+				UserID: int64(userID),
+				OrgID:  int64(orgID),
+				Role:   principal.Role(role),
+			})
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}

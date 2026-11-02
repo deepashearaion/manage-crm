@@ -11,6 +11,7 @@ import (
 
 	"github.com/deepashearaion/manage-crm/internal/auth"
 	"github.com/deepashearaion/manage-crm/internal/contacts"
+	"github.com/deepashearaion/manage-crm/internal/deals"
 	"github.com/deepashearaion/manage-crm/internal/platform/config"
 	"github.com/deepashearaion/manage-crm/internal/platform/httpx"
 	"github.com/deepashearaion/manage-crm/internal/platform/mail"
@@ -37,6 +38,7 @@ func NewHandler(d Deps) http.Handler {
 	authService := auth.NewService(auth.NewRepository(d.DB), tokens, d.Mailer, auth.Settings{
 		RefreshTokenTTL: cfg.RefreshTokenTTL,
 		FrontendURL:     cfg.FrontendURL,
+		OnOrgCreated:    deals.SeedDefaultStages,
 	})
 	auth.Routes(router, auth.NewHandler(authService, d.Logger, auth.HandlerSettings{
 		CookieSecure:               cfg.RefreshCookieSecure,

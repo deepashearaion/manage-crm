@@ -9,6 +9,8 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/deepashearaion/manage-crm/internal/platform/principal"
 )
 
 // Repository holds all of the auth module's SQL: users, password reset
@@ -21,24 +23,59 @@ func NewRepository(db *pgxpool.Pool) *Repository {
 	return &Repository{db: db}
 }
 
-func (r *Repository) UserByEmail(ctx context.Context, email string) (User, error) {
+const userColumns = `id, org_id, role, name, email, password_hash`
+
+func scanUser(row pgx.Row) (User, error) {
 	var u User
-	err := r.db.QueryRow(ctx,
-		`SELECT id, name, email, password_hash FROM users WHERE email = $1`,
-		email,
-	).Scan(&u.ID, &u.Name, &u.Email, &u.PasswordHash)
+	err := row.Scan(&u.ID, &u.OrgID, &u.Role, &u.Name, &u.Email, &u.PasswordHash)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return User{}, errUserNotFound
 	}
 	return u, err
 }
 
-// CreateUser inserts a user; a duplicate email returns ErrEmailTaken.
-func (r *Repository) CreateUser(ctx context.Context, name, email, passwordHash string) (int64, error) {
+func (r *Repository) UserByEmail(ctx context.Context, email string) (User, error) {
+	return scanUser(r.db.QueryRow(ctx, `SELECT `+userColumns+` FROM users WHERE email = $1`, email))
+}
+
+func (r *Repository) UserByID(ctx context.Context, id int64) (User, error) {
+	return scanUser(r.db.QueryRow(ctx, `SELECT `+userColumns+` FROM users WHERE id = $1`, id))
+}
+
+// CreateOrgWithOwner creates an org and its first user (role owner) in one
+// transaction, running onCreated inside it. A duplicate email returns
+// ErrEmailTaken.
+func (r *Repository) CreateOrgWithOwner(ctx context.Context, orgName string, owner User, onCreated OrgCreatedHook) (User, error) {
+	err := pgx.BeginFunc(ctx, r.db, func(tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx, `INSERT INTO orgs (name) VALUES ($1) RETURNING id`, orgName).Scan(&owner.OrgID); err != nil {
+			return err
+		}
+		owner.Role = principal.RoleOwner
+		var err error
+		if owner.ID, err = insertUser(ctx, tx, owner); err != nil {
+			return err
+		}
+		if onCreated != nil {
+			return onCreated(ctx, tx, owner.OrgID)
+		}
+		return nil
+	})
+	return owner, err
+}
+
+// CreateUser adds a user to an existing org; a duplicate email returns
+// ErrEmailTaken.
+func (r *Repository) CreateUser(ctx context.Context, u User) (User, error) {
+	var err error
+	u.ID, err = insertUser(ctx, r.db, u)
+	return u, err
+}
+
+func insertUser(ctx context.Context, db queryRower, u User) (int64, error) {
 	var id int64
-	err := r.db.QueryRow(ctx,
-		`INSERT INTO users (name, email, password_hash) VALUES ($1, $2, $3) RETURNING id`,
-		name, email, passwordHash,
+	err := db.QueryRow(ctx,
+		`INSERT INTO users (org_id, role, name, email, password_hash) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		u.OrgID, u.Role, u.Name, u.Email, u.PasswordHash,
 	).Scan(&id)
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {

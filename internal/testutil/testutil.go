@@ -64,10 +64,10 @@ type Execer interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 }
 
-// Truncate empties every data table and resets identities. Seed tables
-// (deal_stages) are left intact.
+// Truncate empties every data table, including orgs and their deal stages,
+// and resets identities.
 func Truncate(ctx context.Context, db Execer) error {
-	_, err := db.Exec(ctx, `TRUNCATE users, contacts, deals RESTART IDENTITY CASCADE`)
+	_, err := db.Exec(ctx, `TRUNCATE orgs, users, contacts, deals, deal_stages RESTART IDENTITY CASCADE`)
 	return err
 }
 

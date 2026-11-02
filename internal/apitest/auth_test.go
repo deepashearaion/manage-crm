@@ -135,7 +135,11 @@ func TestForgedTokensRejected(t *testing.T) {
 		})
 	}
 
-	valid := sign(jwt.SigningMethodHS256, secret, jwt.MapClaims{"user_id": userID, "exp": future})
+	// A token from before multi-tenancy (no org or role) must sign in again.
+	wantText(t, s.do("GET", "/api/profile", nil, sign(jwt.SigningMethodHS256, secret, jwt.MapClaims{"user_id": userID, "exp": future})),
+		http.StatusUnauthorized, "Invalid token claims")
+
+	valid := sign(jwt.SigningMethodHS256, secret, jwt.MapClaims{"user_id": userID, "org_id": 1, "role": "owner", "exp": future})
 	wantStatus(t, s.do("GET", "/api/profile", nil, valid), http.StatusOK)
 }
 

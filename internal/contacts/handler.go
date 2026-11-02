@@ -25,9 +25,8 @@ func NewHandler(svc *Service, logger *slog.Logger) *Handler {
 }
 
 func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
-	p, ok := principal.From(r.Context())
+	p, ok := caller(w, r)
 	if !ok {
-		http.Error(w, "User authentication information not found", http.StatusUnauthorized)
 		return
 	}
 
@@ -37,14 +36,8 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	c, err := h.svc.Create(r.Context(), p.UserID, c)
-	switch {
-	case errors.Is(err, ErrFirstNameRequired):
-		http.Error(w, "First name is required", http.StatusBadRequest)
-		return
-	case err != nil:
-		h.serverError(r, "create contact", err)
-		http.Error(w, "Failed to create contact", http.StatusInternalServerError)
+	c, err := h.svc.Create(r.Context(), p, c)
+	if h.writeError(w, r, "create contact", "Failed to create contact", err) {
 		return
 	}
 
@@ -55,10 +48,13 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
-	list, err := h.svc.List(r.Context())
-	if err != nil {
-		h.serverError(r, "list contacts", err)
-		http.Error(w, "Failed to fetch contacts", http.StatusInternalServerError)
+	p, ok := caller(w, r)
+	if !ok {
+		return
+	}
+
+	list, err := h.svc.List(r.Context(), p)
+	if h.writeError(w, r, "list contacts", "Failed to fetch contacts", err) {
 		return
 	}
 
@@ -68,19 +64,17 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
+	p, ok := caller(w, r)
+	if !ok {
+		return
+	}
 	id, ok := contactID(w, r)
 	if !ok {
 		return
 	}
 
-	c, err := h.svc.Get(r.Context(), id)
-	switch {
-	case errors.Is(err, ErrNotFound):
-		http.Error(w, "Contact not found", http.StatusNotFound)
-		return
-	case err != nil:
-		h.serverError(r, "get contact", err)
-		http.Error(w, "Failed to fetch contact", http.StatusInternalServerError)
+	c, err := h.svc.Get(r.Context(), p, id)
+	if h.writeError(w, r, "get contact", "Failed to fetch contact", err) {
 		return
 	}
 
@@ -90,25 +84,23 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
+	p, ok := caller(w, r)
+	if !ok {
+		return
+	}
 	id, ok := contactID(w, r)
 	if !ok {
 		return
 	}
 
-	var p Patch
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+	var patch Patch
+	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
-	c, err := h.svc.Update(r.Context(), id, p)
-	switch {
-	case errors.Is(err, ErrNotFound):
-		http.Error(w, "Contact not found", http.StatusNotFound)
-		return
-	case err != nil:
-		h.serverError(r, "update contact", err)
-		http.Error(w, "Failed to update contact", http.StatusInternalServerError)
+	c, err := h.svc.Update(r.Context(), p, id, patch)
+	if h.writeError(w, r, "update contact", "Failed to update contact", err) {
 		return
 	}
 
@@ -119,25 +111,52 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
+	p, ok := caller(w, r)
+	if !ok {
+		return
+	}
 	id, ok := contactID(w, r)
 	if !ok {
 		return
 	}
 
-	err := h.svc.Delete(r.Context(), id)
-	switch {
-	case errors.Is(err, ErrNotFound):
-		http.Error(w, "Contact not found", http.StatusNotFound)
-		return
-	case err != nil:
-		h.serverError(r, "delete contact", err)
-		http.Error(w, "Failed to delete contact", http.StatusInternalServerError)
+	err := h.svc.Delete(r.Context(), p, id)
+	if h.writeError(w, r, "delete contact", "Failed to delete contact", err) {
 		return
 	}
 
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{
 		"message": "Contact deleted successfully",
 	})
+}
+
+// writeError answers err as a plain-text error and reports whether it did;
+// unexpected errors are logged and answered with failure.
+func (h *Handler) writeError(w http.ResponseWriter, r *http.Request, action, failure string, err error) bool {
+	switch {
+	case err == nil:
+		return false
+	case errors.Is(err, ErrFirstNameRequired):
+		http.Error(w, "First name is required", http.StatusBadRequest)
+	case errors.Is(err, ErrInvalidOwner):
+		http.Error(w, "Invalid lead owner", http.StatusBadRequest)
+	case errors.Is(err, ErrForbidden):
+		http.Error(w, "You do not have permission to perform this action", http.StatusForbidden)
+	case errors.Is(err, ErrNotFound):
+		http.Error(w, "Contact not found", http.StatusNotFound)
+	default:
+		h.logger.ErrorContext(r.Context(), action, slog.Any("error", err))
+		http.Error(w, failure, http.StatusInternalServerError)
+	}
+	return true
+}
+
+func caller(w http.ResponseWriter, r *http.Request) (principal.Principal, bool) {
+	p, ok := principal.From(r.Context())
+	if !ok {
+		http.Error(w, "User authentication information not found", http.StatusUnauthorized)
+	}
+	return p, ok
 }
 
 // contactID parses the {id} path variable, answering 400 when it is not a
@@ -149,8 +168,4 @@ func contactID(w http.ResponseWriter, r *http.Request) (int64, bool) {
 		return 0, false
 	}
 	return id, true
-}
-
-func (h *Handler) serverError(r *http.Request, action string, err error) {
-	h.logger.ErrorContext(r.Context(), action, slog.Any("error", err))
 }

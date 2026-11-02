@@ -4,6 +4,8 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+
+	"github.com/deepashearaion/manage-crm/internal/platform/principal"
 )
 
 // JWT issues and validates HS256 access tokens signed with a secret from
@@ -20,10 +22,13 @@ func NewJWT(secret []byte, ttl time.Duration) *JWT {
 // TTL is how long issued access tokens stay valid.
 func (j *JWT) TTL() time.Duration { return j.ttl }
 
-func (j *JWT) Generate(userID int64) (string, error) {
+// Generate issues an access token carrying the caller's user, org and role.
+func (j *JWT) Generate(p principal.Principal) (string, error) {
 	now := time.Now()
 	return jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"user_id": userID,
+		"user_id": p.UserID,
+		"org_id":  p.OrgID,
+		"role":    string(p.Role),
 		"exp":     now.Add(j.ttl).Unix(),
 		"iat":     now.Unix(),
 	}).SignedString(j.secret)

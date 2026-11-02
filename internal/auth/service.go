@@ -19,6 +19,8 @@ type Settings struct {
 	RefreshTokenTTL time.Duration
 	// FrontendURL is the base of the password-reset link sent by email.
 	FrontendURL string
+	// OnOrgCreated sets up other modules' data for a new org.
+	OnOrgCreated OrgCreatedHook
 }
 
 type Service struct {
@@ -33,9 +35,12 @@ func NewService(repo *Repository, tokens *JWT, mailer mail.Mailer, settings Sett
 }
 
 // Register creates an account and returns its id.
-func (s *Service) Register(ctx context.Context, name, email, password string) (int64, error) {
+// Register signs up a new org with the user as its owner. orgName defaults
+// to "<name>'s organization".
+func (s *Service) Register(ctx context.Context, name, email, password, orgName string) (int64, error) {
 	name = strings.TrimSpace(name)
 	email = validate.NormalizeEmail(email)
+	orgName = strings.TrimSpace(orgName)
 
 	switch {
 	case name == "" || email == "" || password == "":
@@ -60,7 +65,11 @@ func (s *Service) Register(ctx context.Context, name, email, password string) (i
 	if err != nil {
 		return 0, fmt.Errorf("hash password: %w", err)
 	}
-	return s.repo.CreateUser(ctx, name, email, hash)
+	if orgName == "" {
+		orgName = name + "'s organization"
+	}
+	owner, err := s.repo.CreateOrgWithOwner(ctx, orgName, User{Name: name, Email: email, PasswordHash: hash}, s.settings.OnOrgCreated)
+	return owner.ID, err
 }
 
 // Login checks credentials and starts a session.
@@ -84,7 +93,7 @@ func (s *Service) Login(ctx context.Context, email, password string) (Session, e
 	if err != nil {
 		return Session{}, fmt.Errorf("start session: %w", err)
 	}
-	return s.session(user.ID, RefreshToken{Token: refresh, ExpiresAt: expiresAt})
+	return s.session(user, RefreshToken{Token: refresh, ExpiresAt: expiresAt})
 }
 
 // Refresh rotates a refresh token and issues a new access token. Reusing an
@@ -102,7 +111,12 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (Session, er
 	if err != nil {
 		return Session{UserID: userID}, err
 	}
-	return s.session(userID, RefreshToken{Token: next, ExpiresAt: expiresAt})
+	// Reload the user so a changed role takes effect at the next refresh.
+	user, err := s.repo.UserByID(ctx, userID)
+	if err != nil {
+		return Session{}, fmt.Errorf("load user: %w", err)
+	}
+	return s.session(user, RefreshToken{Token: next, ExpiresAt: expiresAt})
 }
 
 // Logout ends the session a refresh token belongs to; unknown or empty
@@ -165,10 +179,10 @@ func (s *Service) ResetPassword(ctx context.Context, token, password string) err
 // AccessTokenTTL is how long issued access tokens stay valid.
 func (s *Service) AccessTokenTTL() time.Duration { return s.tokens.TTL() }
 
-func (s *Service) session(userID int64, refresh RefreshToken) (Session, error) {
-	access, err := s.tokens.Generate(userID)
+func (s *Service) session(user User, refresh RefreshToken) (Session, error) {
+	access, err := s.tokens.Generate(user.Principal())
 	if err != nil {
 		return Session{}, fmt.Errorf("generate access token: %w", err)
 	}
-	return Session{UserID: userID, AccessToken: access, RefreshToken: refresh}, nil
+	return Session{UserID: user.ID, AccessToken: access, RefreshToken: refresh}, nil
 }

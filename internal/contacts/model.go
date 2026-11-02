@@ -40,6 +40,10 @@ type Patch struct {
 }
 
 var (
+	// ErrNotFound is also returned for contacts outside the caller's scope,
+	// so their existence is not revealed.
 	ErrNotFound          = errors.New("contact not found")
 	ErrFirstNameRequired = errors.New("first name is required")
+	ErrForbidden         = errors.New("not allowed")
+	ErrInvalidOwner      = errors.New("lead owner is not a user in this organization")
 )

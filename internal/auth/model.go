@@ -1,17 +1,33 @@
 package auth
 
 import (
+	"context"
 	"errors"
 	"time"
+
+	"github.com/jackc/pgx/v5"
+
+	"github.com/deepashearaion/manage-crm/internal/platform/principal"
 )
 
 // User is an account that can sign in.
 type User struct {
 	ID           int64
+	OrgID        int64
+	Role         principal.Role
 	Name         string
 	Email        string
 	PasswordHash string
 }
+
+// Principal is the caller identity a user's access token carries.
+func (u User) Principal() principal.Principal {
+	return principal.Principal{UserID: u.ID, OrgID: u.OrgID, Role: u.Role}
+}
+
+// OrgCreatedHook runs inside the transaction that creates an org, so other
+// modules can set up the org's data (e.g. default deal stages) atomically.
+type OrgCreatedHook func(ctx context.Context, tx pgx.Tx, orgID int64) error
 
 // Session is the outcome of signing in or refreshing: a short-lived access
 // token (JWT) and the rotating refresh token that renews it.

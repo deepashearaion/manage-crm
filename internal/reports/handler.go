@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/deepashearaion/manage-crm/internal/platform/httpx"
+	"github.com/deepashearaion/manage-crm/internal/platform/principal"
 )
 
 type Handler struct {
@@ -17,7 +18,13 @@ func NewHandler(svc *Service, logger *slog.Logger) *Handler {
 }
 
 func (h *Handler) SalesDashboard(w http.ResponseWriter, r *http.Request) {
-	d, err := h.svc.SalesDashboard(r.Context())
+	p, ok := principal.From(r.Context())
+	if !ok {
+		http.Error(w, "User authentication information not found", http.StatusUnauthorized)
+		return
+	}
+
+	d, err := h.svc.SalesDashboard(r.Context(), p)
 	if err != nil {
 		h.logger.ErrorContext(r.Context(), "sales dashboard", slog.Any("error", err))
 		http.Error(w, "Failed to load sales dashboard", http.StatusInternalServerError)

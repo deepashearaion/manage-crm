@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -14,6 +15,13 @@ type Repository struct {
 
 func NewRepository(db *pgxpool.Pool) *Repository {
 	return &Repository{db: db}
+}
+
+// Scope limits queries to one org and, when OwnerID is set, to the contacts
+// that user owns. Every query takes a Scope, so no query can cross orgs.
+type Scope struct {
+	OrgID   int64
+	OwnerID *int64
 }
 
 // columns lists Contact's fields in scan order; NULL text reads as "".
@@ -33,6 +41,10 @@ const columns = `
 	created_at,
 	updated_at`
 
+// scopeFilter is the WHERE condition for a Scope whose org and owner are
+// bound to parameters $1 and $2.
+const scopeFilter = `org_id = $1 AND ($2::bigint IS NULL OR lead_owner_id = $2)`
+
 func scan(row pgx.Row) (Contact, error) {
 	var c Contact
 	err := row.Scan(
@@ -51,12 +63,18 @@ func scan(row pgx.Row) (Contact, error) {
 		&c.CreatedAt,
 		&c.UpdatedAt,
 	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Contact{}, ErrNotFound
+	}
 	return c, err
 }
 
-// List returns every contact, newest first.
-func (r *Repository) List(ctx context.Context) ([]Contact, error) {
-	rows, err := r.db.Query(ctx, `SELECT `+columns+` FROM contacts ORDER BY id DESC`)
+// List returns the contacts in scope, newest first.
+func (r *Repository) List(ctx context.Context, s Scope) ([]Contact, error) {
+	rows, err := r.db.Query(ctx,
+		`SELECT `+columns+` FROM contacts WHERE `+scopeFilter+` ORDER BY id DESC`,
+		s.OrgID, s.OwnerID,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -73,59 +91,65 @@ func (r *Repository) List(ctx context.Context) ([]Contact, error) {
 	return list, rows.Err()
 }
 
-func (r *Repository) Get(ctx context.Context, id int64) (Contact, error) {
-	c, err := scan(r.db.QueryRow(ctx, `SELECT `+columns+` FROM contacts WHERE id = $1`, id))
-	if errors.Is(err, pgx.ErrNoRows) {
-		return Contact{}, ErrNotFound
-	}
-	return c, err
+// Get returns a contact in scope, or ErrNotFound.
+func (r *Repository) Get(ctx context.Context, s Scope, id int64) (Contact, error) {
+	return scan(r.db.QueryRow(ctx,
+		`SELECT `+columns+` FROM contacts WHERE `+scopeFilter+` AND id = $3`,
+		s.OrgID, s.OwnerID, id,
+	))
 }
 
-// Create inserts c and fills in its ID and timestamps.
-func (r *Repository) Create(ctx context.Context, c *Contact) error {
+// Create inserts c into orgID and fills in its ID and timestamps.
+func (r *Repository) Create(ctx context.Context, orgID int64, c *Contact) error {
 	return r.db.QueryRow(ctx,
 		`INSERT INTO contacts (
-			first_name, last_name, email, mobile, alternate_mobile, company_id,
+			org_id, first_name, last_name, email, mobile, alternate_mobile, company_id,
 			lead_status_id, lead_owner_id, destination, source, notes
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		RETURNING id, created_at, updated_at`,
-		c.FirstName, c.LastName, c.Email, c.Mobile, c.AlternateMobile, c.CompanyID,
+		orgID, c.FirstName, c.LastName, c.Email, c.Mobile, c.AlternateMobile, c.CompanyID,
 		c.LeadStatusID, c.LeadOwnerID, c.Destination, c.Source, c.Notes,
 	).Scan(&c.ID, &c.CreatedAt, &c.UpdatedAt)
 }
 
-// Update applies p to the contact and returns the result.
-func (r *Repository) Update(ctx context.Context, id int64, p Patch) (Contact, error) {
+// Update applies p to a contact in scope and returns the result. An owner
+// outside the org returns ErrInvalidOwner.
+func (r *Repository) Update(ctx context.Context, s Scope, id int64, p Patch) (Contact, error) {
 	c, err := scan(r.db.QueryRow(ctx,
 		`UPDATE contacts
 		SET
-			first_name = COALESCE($1, first_name),
-			last_name = COALESCE($2, last_name),
-			email = COALESCE($3, email),
-			mobile = COALESCE($4, mobile),
-			alternate_mobile = COALESCE($5, alternate_mobile),
-			company_id = COALESCE($6, company_id),
-			lead_status_id = COALESCE($7, lead_status_id),
-			lead_owner_id = COALESCE($8, lead_owner_id),
-			destination = COALESCE($9, destination),
-			source = COALESCE($10, source),
-			notes = COALESCE($11, notes),
+			first_name = COALESCE($4, first_name),
+			last_name = COALESCE($5, last_name),
+			email = COALESCE($6, email),
+			mobile = COALESCE($7, mobile),
+			alternate_mobile = COALESCE($8, alternate_mobile),
+			company_id = COALESCE($9, company_id),
+			lead_status_id = COALESCE($10, lead_status_id),
+			lead_owner_id = COALESCE($11, lead_owner_id),
+			destination = COALESCE($12, destination),
+			source = COALESCE($13, source),
+			notes = COALESCE($14, notes),
 			updated_at = CURRENT_TIMESTAMP
-		WHERE id = $12
+		WHERE `+scopeFilter+` AND id = $3
 		RETURNING `+columns,
+		s.OrgID, s.OwnerID, id,
 		p.FirstName, p.LastName, p.Email, p.Mobile, p.AlternateMobile, p.CompanyID,
 		p.LeadStatusID, p.LeadOwnerID, p.Destination, p.Source, p.Notes,
-		id,
 	))
-	if errors.Is(err, pgx.ErrNoRows) {
-		return Contact{}, ErrNotFound
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.ConstraintName == "contacts_lead_owner_same_org_fkey" {
+		return Contact{}, ErrInvalidOwner
 	}
 	return c, err
 }
 
-func (r *Repository) Delete(ctx context.Context, id int64) error {
-	tag, err := r.db.Exec(ctx, `DELETE FROM contacts WHERE id = $1`, id)
+// Delete removes a contact in scope, or returns ErrNotFound.
+func (r *Repository) Delete(ctx context.Context, s Scope, id int64) error {
+	tag, err := r.db.Exec(ctx,
+		`DELETE FROM contacts WHERE `+scopeFilter+` AND id = $3`,
+		s.OrgID, s.OwnerID, id,
+	)
 	if err != nil {
 		return err
 	}

@@ -47,13 +47,15 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 		Name     string `json:"name"`
 		Email    string `json:"email"`
 		Password string `json:"password"`
+		// OrganizationName is optional; it defaults to "<name>'s organization".
+		OrganizationName string `json:"organization_name"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
-	userID, err := h.svc.Register(r.Context(), req.Name, req.Email, req.Password)
+	userID, err := h.svc.Register(r.Context(), req.Name, req.Email, req.Password, req.OrganizationName)
 	switch {
 	case errors.Is(err, ErrMissingFields):
 		http.Error(w, "Name, email and password are required", http.StatusBadRequest)

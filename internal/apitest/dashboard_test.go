@@ -18,15 +18,16 @@ func TestSalesDashboard(t *testing.T) {
 	}
 
 	createContact(t, s, token, map[string]any{"first_name": "Today"})
-	s.exec(`INSERT INTO deals (title, amount, stage_id, monthly_recurring_revenue, annual_recurring_revenue)
-		SELECT v.title, v.amount, ds.id, v.mrr, v.arr
+	// The test user registered the first org (id 1), which got the default stages.
+	s.exec(`INSERT INTO deals (org_id, title, amount, stage_id, monthly_recurring_revenue, annual_recurring_revenue)
+		SELECT 1, v.title, v.amount, ds.id, v.mrr, v.arr
 		FROM (VALUES
 			('open-1', 100.50, 'Proposal', 10, 120),
 			('open-2', 200, 'Qualification', 0, 0),
 			('won', 1000, 'Closed Won', 50, 600),
 			('lost', 300, 'Closed Lost', 5, 60)
 		) AS v(title, amount, stage, mrr, arr)
-		JOIN deal_stages ds ON ds.name = v.stage`)
+		JOIN deal_stages ds ON ds.name = v.stage AND ds.org_id = 1`)
 
 	got := wantJSON(t, s.do("GET", "/api/dashboard/sales", nil, token), http.StatusOK)
 	// Current behavior: ARR/MRR sum every deal, including open and lost ones.
@@ -82,9 +83,9 @@ func TestSalesDashboardTodayIsIST(t *testing.T) {
 	s := newServer(t)
 	_, token := s.userToken()
 
-	s.exec(`INSERT INTO contacts (first_name, created_at) VALUES
-		('just after IST midnight',  date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata' + interval '1 minute'),
-		('just before IST midnight', date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata' - interval '1 minute')`)
+	s.exec(`INSERT INTO contacts (org_id, first_name, created_at) VALUES
+		(1, 'just after IST midnight',  date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata' + interval '1 minute'),
+		(1, 'just before IST midnight', date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata' - interval '1 minute')`)
 
 	got := wantJSON(t, s.do("GET", "/api/dashboard/sales", nil, token), http.StatusOK)
 	if got["total_new_customers"] != float64(1) {
