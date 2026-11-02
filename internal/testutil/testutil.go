@@ -8,12 +8,16 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
+
+	"github.com/deepashearaion/manage-crm/internal/platform/database"
 )
 
 // RepoRoot walks up from the working directory to the directory holding go.mod.
@@ -67,20 +71,33 @@ func Truncate(ctx context.Context, db Execer) error {
 	return err
 }
 
-// Pool opens a connection pool to the test database, empties it, and closes
-// it when the test ends. The test fails if TEST_DATABASE_URL is missing or unsafe.
+var shared struct {
+	once sync.Once
+	pool *pgxpool.Pool
+	err  error
+}
+
+// Pool returns a connection pool to the test database, emptied for the
+// calling test. One pool is shared by all tests in the binary: connecting is
+// slow on some machines, and tests using it must not run in parallel. The test
+// fails if TEST_DATABASE_URL is missing or unsafe.
 func Pool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	url, err := TestDatabaseURL()
-	if err != nil {
-		t.Fatal(err)
+	shared.once.Do(func() {
+		url, err := TestDatabaseURL()
+		if err != nil {
+			shared.err = err
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		shared.pool, shared.err = database.Open(ctx, url)
+	})
+	if shared.err != nil {
+		t.Fatalf("open test database pool: %v", shared.err)
 	}
+	pool := shared.pool
 	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, url)
-	if err != nil {
-		t.Fatalf("open test database pool: %v", err)
-	}
-	t.Cleanup(pool.Close)
 	if err := Truncate(ctx, pool); err != nil {
 		t.Fatalf("truncate test database (run `make test-db` first?): %v", err)
 	}
