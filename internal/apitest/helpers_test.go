@@ -14,28 +14,59 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"authentication-backend/handlers"
+	"authentication-backend/internal/app"
+	"authentication-backend/internal/platform/config"
+	"authentication-backend/internal/platform/logging"
 	"authentication-backend/internal/testutil"
-	"authentication-backend/middleware"
-	"authentication-backend/routes"
 )
 
 type server struct {
-	t  *testing.T
-	h  http.Handler
-	db *pgxpool.Pool
+	t   *testing.T
+	h   http.Handler
+	db  *pgxpool.Pool
+	cfg *config.Config
 }
 
-// newServer builds the full HTTP stack, as main does, on an empty test database.
+// testEnv is the configuration the API tests run with; tests may override
+// entries before calling newServerWith.
+func testEnv() map[string]string {
+	return map[string]string{
+		"APP_ENV":      config.EnvTest,
+		"DB_HOST":      "unused",
+		"DB_USER":      "unused",
+		"DB_NAME":      "unused",
+		"JWT_SECRET":   strings.Repeat("t", 32),
+		"FRONTEND_URL": "http://frontend.test",
+	}
+}
+
+// newServer builds the full HTTP stack, as cmd/api does, on an empty test database.
 func newServer(t *testing.T) *server {
+	return newServerWith(t, testEnv())
+}
+
+func newServerWith(t *testing.T, env map[string]string) *server {
 	t.Helper()
+	cfg, err := config.FromEnv(func(k string) string { return env[k] })
+	if err != nil {
+		t.Fatal(err)
+	}
 	db := testutil.Pool(t)
-	router := routes.SetupRoutes(
-		&handlers.AuthHandler{DB: db},
-		&handlers.ContactHandler{DB: db},
-		&handlers.SalesDashboardHandler{DB: db},
-	)
-	return &server{t: t, h: middleware.CORS(router), db: db}
+	h := app.NewHandler(app.Deps{
+		Config: cfg,
+		DB:     db,
+		Logger: logging.New(testWriter{t}, "text", "warn"),
+	})
+	return &server{t: t, h: h, db: db, cfg: cfg}
+}
+
+// testWriter sends log output to the test log, shown only for failing tests.
+type testWriter struct{ t *testing.T }
+
+func (w testWriter) Write(p []byte) (int, error) {
+	w.t.Helper()
+	w.t.Log(strings.TrimSpace(string(p)))
+	return len(p), nil
 }
 
 // do sends a request. body may be nil, a string (sent verbatim) or any value

@@ -1,49 +1,47 @@
 package main
 
 import (
+	"context"
 	"fmt"
-	"log"
-	"net/http"
+	"log/slog"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
-	"authentication-backend/database"
-	"authentication-backend/handlers"
-	"authentication-backend/middleware"
-	"authentication-backend/routes"
+	"authentication-backend/internal/app"
+	"authentication-backend/internal/platform/config"
+	"authentication-backend/internal/platform/database"
+	"authentication-backend/internal/platform/httpx"
+	"authentication-backend/internal/platform/logging"
 )
 
 func main() {
+	if err := run(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
 
-	conn, err := database.Connect()
-
+func run() error {
+	cfg, err := config.Load()
 	if err != nil {
-		log.Fatal("Database connection failed:", err)
+		return err
 	}
+	logger := logging.New(os.Stdout, cfg.LogFormat, cfg.LogLevel)
+	slog.SetDefault(logger)
 
-	defer conn.Close()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
-	authHandler := &handlers.AuthHandler{
-		DB: conn,
-	}
-
-	contactHandler := &handlers.ContactHandler{
-		DB: conn,
-	}
-
-	salesDashboardHandler := &handlers.SalesDashboardHandler{
-		DB: conn,
-	}
-
-	router := routes.SetupRoutes(
-		authHandler,
-		contactHandler,
-		salesDashboardHandler,
-	)
-
-	fmt.Println("Server running on http://localhost:8080")
-
-	err = http.ListenAndServe(":8080", middleware.CORS(router)) //nolint:gosec // G114: replaced by a configured http.Server in the platform step
-
+	db, err := database.Open(ctx, cfg.DatabaseURL)
 	if err != nil {
-		log.Fatal("Server failed:", err)
+		return err
 	}
+	defer db.Close()
+
+	handler := app.NewHandler(app.Deps{Config: cfg, DB: db, Logger: logger})
+
+	logger.Info("starting", slog.String("env", cfg.Env))
+	return httpx.Serve(ctx, ":"+cfg.Port, handler, logger, 15*time.Second)
 }

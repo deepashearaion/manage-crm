@@ -1,5 +1,5 @@
 // Command migrate applies the embedded SQL migrations to the database
-// configured in .env (DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME).
+// configured by DB_HOST, DB_PORT, DB_USER, DB_PASSWORD and DB_NAME (.env or environment).
 //
 //	go run ./cmd/migrate [up|down|status|version]
 package main
@@ -10,7 +10,7 @@ import (
 	"log"
 	"os"
 
-	"authentication-backend/database"
+	"authentication-backend/internal/platform/config"
 	"authentication-backend/migrations"
 )
 
@@ -26,7 +26,7 @@ func run(ctx context.Context, args []string) error {
 		command = args[0]
 	}
 
-	dsn, err := database.DSN()
+	dsn, err := config.LoadDatabaseURL()
 	if err != nil {
 		return err
 	}

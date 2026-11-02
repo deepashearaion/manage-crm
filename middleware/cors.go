@@ -2,24 +2,16 @@ package middleware
 
 import (
 	"net/http"
-	"os"
-	"strings"
 )
 
-// CORS allows the frontend (CORS_ALLOWED_ORIGINS, comma-separated) to call the API
-// directly from the browser and answers preflight requests.
-func CORS(next http.Handler) http.Handler {
-
-	allowed := os.Getenv("CORS_ALLOWED_ORIGINS")
-
-	if allowed == "" {
-		allowed = "http://localhost:5173"
-	}
+// CORS allows the given frontend origins to call the API directly from the
+// browser and answers preflight requests.
+func CORS(allowedOrigins []string, next http.Handler) http.Handler {
 
 	origins := map[string]bool{}
 
-	for _, origin := range strings.Split(allowed, ",") {
-		origins[strings.TrimSpace(origin)] = true
+	for _, origin := range allowedOrigins {
+		origins[origin] = true
 	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
