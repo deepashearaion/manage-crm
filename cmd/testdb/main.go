@@ -1,18 +1,17 @@
 // Command testdb drops and recreates the test database named by
-// TEST_DATABASE_URL and loads the schema into it. It refuses to run against
-// any database whose name does not end in "_test".
+// TEST_DATABASE_URL and applies all migrations to it. It refuses to run
+// against any database whose name does not end in "_test".
 package main
 
 import (
 	"context"
 	"fmt"
 	"log"
-	"os"
-	"path/filepath"
 
 	"github.com/jackc/pgx/v5"
 
 	"authentication-backend/internal/testutil"
+	"authentication-backend/migrations"
 )
 
 func main() {
@@ -48,23 +47,11 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("create %s: %w", name, err)
 	}
 
-	root, err := testutil.RepoRoot()
+	results, err := migrations.Up(ctx, url)
 	if err != nil {
 		return err
-	}
-	schema, err := os.ReadFile(filepath.Join(root, "database", "schema.sql")) //nolint:gosec // fixed path inside the repo
-	if err != nil {
-		return err
-	}
-	conn, err := pgx.Connect(ctx, url)
-	if err != nil {
-		return err
-	}
-	defer conn.Close(ctx)
-	if _, err := conn.Exec(ctx, string(schema)); err != nil {
-		return fmt.Errorf("load schema: %w", err)
 	}
 
-	fmt.Printf("test database %s recreated\n", name)
+	fmt.Printf("test database %s recreated, %d migrations applied\n", name, len(results))
 	return nil
 }

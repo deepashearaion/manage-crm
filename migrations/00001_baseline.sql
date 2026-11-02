@@ -1,4 +1,9 @@
-CREATE TABLE users (
+-- Baseline: the schema as it existed before goose was introduced
+-- (formerly database/schema.sql). Every statement is idempotent so this
+-- migration is a no-op on databases created from the old schema file.
+
+-- +goose Up
+CREATE TABLE IF NOT EXISTS users (
     id BIGSERIAL PRIMARY KEY,
     name VARCHAR(100) NOT NULL,
     email VARCHAR(255) NOT NULL UNIQUE,
@@ -54,3 +59,7 @@ VALUES
     ('Closed Won'),
     ('Closed Lost')
 ON CONFLICT (name) DO NOTHING;
+
+-- +goose Down
+-- The baseline is not reversible: rolling it back would drop all data.
+SELECT 'baseline migration cannot be rolled back';
