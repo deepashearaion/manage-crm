@@ -82,6 +82,15 @@ func SetupRoutes(
 		),
 	).Methods(http.MethodPost)
 
+	// Get contact by ID
+	router.Handle(
+		"/api/contacts/{id}",
+		middleware.JWTValidation(
+			tokens,
+			http.HandlerFunc(contactHandler.GetContactByID),
+		),
+	).Methods(http.MethodGet)
+
 	// Update contact
 	router.Handle(
 		"/api/contacts/{id}",

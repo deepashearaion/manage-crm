@@ -128,3 +128,19 @@ func TestDeleteContact(t *testing.T) {
 	wantText(t, s.do("DELETE", path, nil, token), http.StatusNotFound, "Contact not found")
 	wantText(t, s.do("DELETE", "/api/contacts/x", nil, token), http.StatusBadRequest, "Invalid contact ID")
 }
+
+func TestGetContactByID(t *testing.T) {
+	s := newServer(t)
+	_, token := s.userToken()
+	c := createContact(t, s, token, map[string]any{"first_name": "Ravi", "email": "ravi@example.com"})
+
+	body := wantJSON(t, s.do("GET", fmt.Sprintf("/api/contacts/%v", c["id"]), nil, token), http.StatusOK)
+	got := body["contact"].(map[string]any)
+	if got["id"] != c["id"] || got["first_name"] != "Ravi" || got["email"] != "ravi@example.com" || got["last_name"] != "" {
+		t.Errorf("contact = %v", got)
+	}
+
+	wantText(t, s.do("GET", "/api/contacts/999", nil, token), http.StatusNotFound, "Contact not found")
+	wantText(t, s.do("GET", "/api/contacts/abc", nil, token), http.StatusBadRequest, "Invalid contact ID")
+	wantText(t, s.do("GET", "/api/contacts/1", nil, ""), http.StatusUnauthorized, "Authorization token required")
+}
