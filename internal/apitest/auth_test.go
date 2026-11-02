@@ -4,6 +4,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
+
+	"github.com/golang-jwt/jwt/v5"
 )
 
 func TestRegister(t *testing.T) {
@@ -143,4 +146,37 @@ func TestAuthMiddleware(t *testing.T) {
 	req := httptest.NewRequest("GET", "/api/profile", nil)
 	req.Header.Set("Authorization", "Token abc")
 	wantText(t, s.serve(req), http.StatusUnauthorized, "Invalid authorization format")
+}
+
+func TestForgedTokensRejected(t *testing.T) {
+	s := newServer(t)
+	userID, _ := s.userToken()
+	future := time.Now().Add(time.Hour).Unix()
+	secret := s.cfg.JWTSecret
+
+	sign := func(method jwt.SigningMethod, key any, claims jwt.MapClaims) string {
+		t.Helper()
+		tok, err := jwt.NewWithClaims(method, claims).SignedString(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return tok
+	}
+
+	cases := map[string]string{
+		// The secret that used to be hardcoded in utils/jwt.go.
+		"old hardcoded secret": sign(jwt.SigningMethodHS256, []byte("my-secret-key"), jwt.MapClaims{"user_id": userID, "exp": future}),
+		"alg none":             sign(jwt.SigningMethodNone, jwt.UnsafeAllowNoneSignatureType, jwt.MapClaims{"user_id": userID, "exp": future}),
+		"other HMAC algorithm": sign(jwt.SigningMethodHS512, secret, jwt.MapClaims{"user_id": userID, "exp": future}),
+		"expired":              sign(jwt.SigningMethodHS256, secret, jwt.MapClaims{"user_id": userID, "exp": time.Now().Add(-time.Minute).Unix()}),
+		"no expiry":            sign(jwt.SigningMethodHS256, secret, jwt.MapClaims{"user_id": userID}),
+	}
+	for name, tok := range cases {
+		t.Run(name, func(t *testing.T) {
+			wantText(t, s.do("GET", "/api/profile", nil, tok), http.StatusUnauthorized, "Invalid or expired token")
+		})
+	}
+
+	valid := sign(jwt.SigningMethodHS256, secret, jwt.MapClaims{"user_id": userID, "exp": future})
+	wantStatus(t, s.do("GET", "/api/profile", nil, valid), http.StatusOK)
 }

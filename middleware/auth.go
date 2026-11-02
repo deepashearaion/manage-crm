@@ -14,7 +14,7 @@ type contextKey string
 
 const UserIDKey contextKey = "userID"
 
-func JWTValidation(next http.HandlerFunc) http.HandlerFunc {
+func JWTValidation(tokens *utils.JWT, next http.HandlerFunc) http.HandlerFunc {
 
 	return func(w http.ResponseWriter, r *http.Request) {
 
@@ -42,7 +42,7 @@ func JWTValidation(next http.HandlerFunc) http.HandlerFunc {
 
 		tokenString := parts[1]
 
-		token, err := utils.ValidateJWT(tokenString)
+		token, err := tokens.Validate(tokenString)
 
 		if err != nil || !token.Valid {
 			http.Error(

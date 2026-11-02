@@ -5,6 +5,7 @@ import (
 
 	"authentication-backend/handlers"
 	"authentication-backend/middleware"
+	"authentication-backend/utils"
 
 	"github.com/gorilla/mux"
 )
@@ -13,6 +14,7 @@ func SetupRoutes(
 	authHandler *handlers.AuthHandler,
 	contactHandler *handlers.ContactHandler,
 	salesDashboardHandler *handlers.SalesDashboardHandler,
+	tokens *utils.JWT,
 ) *mux.Router {
 
 	router := mux.NewRouter()
@@ -53,6 +55,7 @@ func SetupRoutes(
 	router.Handle(
 		"/api/profile",
 		middleware.JWTValidation(
+			tokens,
 			http.HandlerFunc(authHandler.Profile),
 		),
 	).Methods(http.MethodGet)
@@ -65,6 +68,7 @@ func SetupRoutes(
 	router.Handle(
 		"/api/contacts",
 		middleware.JWTValidation(
+			tokens,
 			http.HandlerFunc(contactHandler.GetContacts),
 		),
 	).Methods(http.MethodGet)
@@ -73,6 +77,7 @@ func SetupRoutes(
 	router.Handle(
 		"/api/contacts",
 		middleware.JWTValidation(
+			tokens,
 			http.HandlerFunc(contactHandler.CreateContact),
 		),
 	).Methods(http.MethodPost)
@@ -81,6 +86,7 @@ func SetupRoutes(
 	router.Handle(
 		"/api/contacts/{id}",
 		middleware.JWTValidation(
+			tokens,
 			http.HandlerFunc(contactHandler.UpdateContact),
 		),
 	).Methods(http.MethodPatch)
@@ -89,6 +95,7 @@ func SetupRoutes(
 	router.Handle(
 		"/api/contacts/{id}",
 		middleware.JWTValidation(
+			tokens,
 			http.HandlerFunc(contactHandler.DeleteContact),
 		),
 	).Methods(http.MethodDelete)
@@ -100,6 +107,7 @@ func SetupRoutes(
 	router.Handle(
 		"/api/dashboard/sales",
 		middleware.JWTValidation(
+			tokens,
 			http.HandlerFunc(
 				salesDashboardHandler.GetSalesDashboard,
 			),

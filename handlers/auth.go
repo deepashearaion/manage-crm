@@ -15,7 +15,8 @@ import (
 )
 
 type AuthHandler struct {
-	DB *pgxpool.Pool
+	DB     *pgxpool.Pool
+	Tokens *utils.JWT
 }
 
 type RegisterRequest struct {
@@ -167,7 +168,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Generate JWT token after successful login
-	token, err := utils.GenerateJWT(userID)
+	token, err := h.Tokens.Generate(userID)
 
 	if err != nil {
 		http.Error(

@@ -5,6 +5,7 @@ package app
 import (
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -13,9 +14,16 @@ import (
 	"authentication-backend/internal/platform/httpx"
 	"authentication-backend/middleware"
 	"authentication-backend/routes"
+	"authentication-backend/utils"
 )
 
-const maxRequestBodyBytes = 1 << 20 // 1 MiB
+const (
+	maxRequestBodyBytes = 1 << 20 // 1 MiB
+
+	// accessTokenTTL keeps the legacy 24h lifetime until short-lived access
+	// tokens with refresh-token rotation replace it.
+	accessTokenTTL = 24 * time.Hour
+)
 
 type Deps struct {
 	Config *config.Config
@@ -25,10 +33,13 @@ type Deps struct {
 
 // NewHandler returns the complete HTTP stack: middleware plus all routes.
 func NewHandler(d Deps) http.Handler {
+	tokens := utils.NewJWT(d.Config.JWTSecret, accessTokenTTL)
+
 	router := routes.SetupRoutes(
-		&handlers.AuthHandler{DB: d.DB},
+		&handlers.AuthHandler{DB: d.DB, Tokens: tokens},
 		&handlers.ContactHandler{DB: d.DB},
 		&handlers.SalesDashboardHandler{DB: d.DB},
+		tokens,
 	)
 
 	return httpx.Chain(router,
