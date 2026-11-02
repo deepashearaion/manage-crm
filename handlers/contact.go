@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -290,7 +291,7 @@ func (h *ContactHandler) GetContactByID(
 	)
 
 	if err != nil {
-		if err == pgx.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			http.Error(
 				w,
 				"Contact not found",
@@ -441,7 +442,7 @@ func (h *ContactHandler) UpdateContact(
 	)
 
 	if err != nil {
-		if err == pgx.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			http.Error(
 				w,
 				"Contact not found",

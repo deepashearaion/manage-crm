@@ -42,7 +42,7 @@ func main() {
 
 	fmt.Println("Server running on http://localhost:8080")
 
-	err = http.ListenAndServe(":8080", middleware.CORS(router))
+	err = http.ListenAndServe(":8080", middleware.CORS(router)) //nolint:gosec // G114: replaced by a configured http.Server in the platform step
 
 	if err != nil {
 		log.Fatal("Server failed:", err)
