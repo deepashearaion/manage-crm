@@ -6,18 +6,15 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/gorilla/mux"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/deepashearaion/manage-crm/handlers"
 	"github.com/deepashearaion/manage-crm/internal/auth"
 	"github.com/deepashearaion/manage-crm/internal/contacts"
 	"github.com/deepashearaion/manage-crm/internal/platform/config"
 	"github.com/deepashearaion/manage-crm/internal/platform/httpx"
 	"github.com/deepashearaion/manage-crm/internal/platform/mail"
 	"github.com/deepashearaion/manage-crm/internal/reports"
-	"github.com/deepashearaion/manage-crm/middleware"
-	"github.com/deepashearaion/manage-crm/routes"
-	"github.com/deepashearaion/manage-crm/utils"
 )
 
 const maxRequestBodyBytes = 1 << 20 // 1 MiB
@@ -31,30 +28,25 @@ type Deps struct {
 
 // NewHandler returns the complete HTTP stack: middleware plus all routes.
 func NewHandler(d Deps) http.Handler {
-	tokens := utils.NewJWT(d.Config.JWTSecret, d.Config.AccessTokenTTL)
+	cfg := d.Config
+	router := mux.NewRouter()
 
-	router := routes.SetupRoutes(
-		&handlers.AuthHandler{
-			DB:                         d.DB,
-			Tokens:                     tokens,
-			Sessions:                   &auth.Sessions{DB: d.DB, TTL: d.Config.RefreshTokenTTL},
-			Mailer:                     d.Mailer,
-			Logger:                     d.Logger,
-			AccessTokenTTL:             d.Config.AccessTokenTTL,
-			CookieSecure:               d.Config.RefreshCookieSecure,
-			FrontendURL:                d.Config.FrontendURL,
-			ReturnResetTokenInResponse: d.Config.ReturnResetTokenInResponse,
-		},
-		tokens,
-	)
+	tokens := auth.NewJWT(cfg.JWTSecret, cfg.AccessTokenTTL)
+	requireUser := auth.RequireUser(tokens)
 
-	requireUser := func(next http.Handler) http.Handler {
-		return middleware.JWTValidation(tokens, next.ServeHTTP)
-	}
+	authService := auth.NewService(auth.NewRepository(d.DB), tokens, d.Mailer, auth.Settings{
+		RefreshTokenTTL: cfg.RefreshTokenTTL,
+		FrontendURL:     cfg.FrontendURL,
+	})
+	auth.Routes(router, auth.NewHandler(authService, d.Logger, auth.HandlerSettings{
+		CookieSecure:               cfg.RefreshCookieSecure,
+		ReturnResetTokenInResponse: cfg.ReturnResetTokenInResponse,
+	}), requireUser)
 
 	contacts.Routes(router,
 		contacts.NewHandler(contacts.NewService(contacts.NewRepository(d.DB)), d.Logger),
 		requireUser)
+
 	reports.Routes(router,
 		reports.NewHandler(reports.NewService(reports.NewRepository(d.DB)), d.Logger),
 		requireUser)
@@ -63,7 +55,7 @@ func NewHandler(d Deps) http.Handler {
 		httpx.RequestID,
 		httpx.AccessLog(d.Logger),
 		httpx.Recover(d.Logger),
-		httpx.CORS(d.Config.CORSAllowedOrigins),
+		httpx.CORS(cfg.CORSAllowedOrigins),
 		httpx.MaxBodyBytes(maxRequestBodyBytes),
 	)
 }

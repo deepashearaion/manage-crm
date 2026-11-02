@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/deepashearaion/manage-crm/handlers"
+	"github.com/deepashearaion/manage-crm/internal/auth"
 )
 
 // loginSession logs in and returns the access token and refresh cookie.
@@ -23,11 +23,11 @@ func (s *server) loginSession(email, password string) (string, *http.Cookie) {
 func refreshCookie(t *testing.T, rec *httptest.ResponseRecorder) *http.Cookie {
 	t.Helper()
 	for _, c := range rec.Result().Cookies() { //nolint:bodyclose // recorder body
-		if c.Name == handlers.RefreshCookieName {
+		if c.Name == auth.RefreshCookieName {
 			return c
 		}
 	}
-	t.Fatalf("no %s cookie in response; Set-Cookie: %q", handlers.RefreshCookieName, rec.Header().Values("Set-Cookie"))
+	t.Fatalf("no %s cookie in response; Set-Cookie: %q", auth.RefreshCookieName, rec.Header().Values("Set-Cookie"))
 	return nil
 }
 
@@ -118,7 +118,7 @@ func TestRefreshRejects(t *testing.T) {
 	s.register("Asha", "asha@example.com", "secret-pass-1")
 
 	wantText(t, s.postWithCookie("/api/auth/refresh", nil), http.StatusUnauthorized, "Invalid or expired refresh token")
-	wantText(t, s.postWithCookie("/api/auth/refresh", &http.Cookie{Name: handlers.RefreshCookieName, Value: "made-up"}),
+	wantText(t, s.postWithCookie("/api/auth/refresh", &http.Cookie{Name: auth.RefreshCookieName, Value: "made-up"}),
 		http.StatusUnauthorized, "Invalid or expired refresh token")
 
 	_, c := s.loginSession("asha@example.com", "secret-pass-1")

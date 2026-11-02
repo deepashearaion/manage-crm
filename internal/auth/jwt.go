@@ -1,4 +1,4 @@
-package utils
+package auth
 
 import (
 	"time"
@@ -17,30 +17,24 @@ func NewJWT(secret []byte, ttl time.Duration) *JWT {
 	return &JWT{secret: secret, ttl: ttl}
 }
 
+// TTL is how long issued access tokens stay valid.
+func (j *JWT) TTL() time.Duration { return j.ttl }
+
 func (j *JWT) Generate(userID int64) (string, error) {
-
 	now := time.Now()
-
-	claims := jwt.MapClaims{
+	return jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"user_id": userID,
 		"exp":     now.Add(j.ttl).Unix(),
 		"iat":     now.Unix(),
-	}
-
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-
-	return token.SignedString(j.secret)
+	}).SignedString(j.secret)
 }
 
 // Validate accepts only HS256 tokens signed with the configured secret that
 // carry an unexpired exp claim.
-func (j *JWT) Validate(tokenString string) (*jwt.Token, error) {
-
+func (j *JWT) Validate(token string) (*jwt.Token, error) {
 	return jwt.Parse(
-		tokenString,
-		func(*jwt.Token) (interface{}, error) {
-			return j.secret, nil
-		},
+		token,
+		func(*jwt.Token) (any, error) { return j.secret, nil },
 		jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}),
 		jwt.WithExpirationRequired(),
 	)
