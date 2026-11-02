@@ -12,6 +12,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
 )
 
@@ -66,22 +67,22 @@ func Truncate(ctx context.Context, db Execer) error {
 	return err
 }
 
-// Conn opens a connection to the test database, empties it, and closes it
-// when the test ends. The test fails if TEST_DATABASE_URL is missing or unsafe.
-func Conn(t *testing.T) *pgx.Conn {
+// Pool opens a connection pool to the test database, empties it, and closes
+// it when the test ends. The test fails if TEST_DATABASE_URL is missing or unsafe.
+func Pool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	url, err := TestDatabaseURL()
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	conn, err := pgx.Connect(ctx, url)
+	pool, err := pgxpool.New(ctx, url)
 	if err != nil {
-		t.Fatalf("connect to test database (run `make test-db` first?): %v", err)
+		t.Fatalf("open test database pool: %v", err)
 	}
-	t.Cleanup(func() { _ = conn.Close(context.Background()) })
-	if err := Truncate(ctx, conn); err != nil {
-		t.Fatalf("truncate test database: %v", err)
+	t.Cleanup(pool.Close)
+	if err := Truncate(ctx, pool); err != nil {
+		t.Fatalf("truncate test database (run `make test-db` first?): %v", err)
 	}
-	return conn
+	return pool
 }

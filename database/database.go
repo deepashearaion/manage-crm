@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
 )
 
-func Connect() (*pgx.Conn, error) {
+// Connect opens a connection pool; unlike a single pgx.Conn it is safe for
+// the concurrent use that serving HTTP requests requires.
+func Connect() (*pgxpool.Pool, error) {
 
 	err := godotenv.Load()
 	if err != nil {
@@ -31,10 +33,15 @@ func Connect() (*pgx.Conn, error) {
 		dbname,
 	)
 
-	conn, err := pgx.Connect(context.Background(), dsn)
+	pool, err := pgxpool.New(context.Background(), dsn)
 	if err != nil {
 		return nil, err
 	}
 
-	return conn, nil
+	if err := pool.Ping(context.Background()); err != nil {
+		pool.Close()
+		return nil, err
+	}
+
+	return pool, nil
 }

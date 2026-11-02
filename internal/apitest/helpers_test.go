@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"authentication-backend/handlers"
 	"authentication-backend/internal/testutil"
@@ -23,13 +23,13 @@ import (
 type server struct {
 	t  *testing.T
 	h  http.Handler
-	db *pgx.Conn
+	db *pgxpool.Pool
 }
 
 // newServer builds the full HTTP stack, as main does, on an empty test database.
 func newServer(t *testing.T) *server {
 	t.Helper()
-	db := testutil.Conn(t)
+	db := testutil.Pool(t)
 	router := routes.SetupRoutes(
 		&handlers.AuthHandler{DB: db},
 		&handlers.ContactHandler{DB: db},

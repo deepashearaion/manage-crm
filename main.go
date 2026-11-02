@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"net/http"
@@ -20,7 +19,7 @@ func main() {
 		log.Fatal("Database connection failed:", err)
 	}
 
-	defer conn.Close(context.Background())
+	defer conn.Close()
 
 	authHandler := &handlers.AuthHandler{
 		DB: conn,
