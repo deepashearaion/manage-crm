@@ -1,10 +1,16 @@
 package mail
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"io"
 	"log/slog"
+	"mime"
+	"mime/multipart"
+	"mime/quotedprintable"
 	"net"
+	netmail "net/mail"
 	"net/textproto"
 	"strconv"
 	"strings"
@@ -172,5 +178,45 @@ func TestAsyncWait(t *testing.T) {
 	a.Wait()
 	if len(rec.msgs) != 1 {
 		t.Errorf("sent %d messages, want 1", len(rec.msgs))
+	}
+}
+
+func TestBuildMessageWithAttachment(t *testing.T) {
+	from, _ := netmail.ParseAddress("CRM <a@crm.test>")
+	to, _ := netmail.ParseAddress("b@crm.test")
+	pdf := bytes.Repeat([]byte("%PDF-1.4 binary \x00\xff"), 20)
+	raw, err := buildMessage(from, to, Message{Subject: "Invoice INV/26-27/0001", Text: "Please find attached.",
+		Attachments: []Attachment{{Name: "INV-26-27-0001.pdf", ContentType: "application/pdf", Data: pdf}}}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg, err := netmail.ReadMessage(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mediaType, params, _ := mime.ParseMediaType(msg.Header.Get("Content-Type"))
+	if mediaType != "multipart/mixed" {
+		t.Fatalf("Content-Type = %q", msg.Header.Get("Content-Type"))
+	}
+	r := multipart.NewReader(msg.Body, params["boundary"])
+	text, err := r.NextPart()
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(quotedprintable.NewReader(text))
+	if string(body) != "Please find attached." {
+		t.Errorf("text part = %q", body)
+	}
+	att, err := r.NextPart()
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ := io.ReadAll(base64.NewDecoder(base64.StdEncoding, att))
+	if att.FileName() != "INV-26-27-0001.pdf" || !bytes.Equal(data, pdf) {
+		t.Errorf("attachment %q, %d bytes intact: %v", att.FileName(), len(data), bytes.Equal(data, pdf))
+	}
+
+	if _, err := buildMessage(from, to, Message{Subject: "x", Attachments: []Attachment{{Name: "a\r\nb", ContentType: "text/plain"}}}, time.Now()); err == nil {
+		t.Error("attachment name with a line break accepted")
 	}
 }

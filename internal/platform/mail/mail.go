@@ -7,26 +7,38 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"mime"
+	"mime/multipart"
 	"mime/quotedprintable"
 	"net"
 	"net/mail"
 	"net/smtp"
+	"net/textproto"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
 
-// Message is a plain-text email.
+// Message is a plain-text email, optionally with attachments.
 type Message struct {
-	To      string
-	Subject string
-	Text    string
+	To          string
+	Subject     string
+	Text        string
+	Attachments []Attachment
+}
+
+// Attachment is a file sent with a message.
+type Attachment struct {
+	Name        string // file name shown to the recipient
+	ContentType string // e.g. application/pdf
+	Data        []byte
 }
 
 type Mailer interface {
@@ -62,7 +74,7 @@ func (s *SMTP) Send(ctx context.Context, msg Message) error {
 	if err != nil {
 		return fmt.Errorf("invalid recipient address: %w", err)
 	}
-	data, err := buildMessage(from, to, msg.Subject, msg.Text, time.Now())
+	data, err := buildMessage(from, to, msg, time.Now())
 	if err != nil {
 		return err
 	}
@@ -134,7 +146,8 @@ func isLocalHost(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-func buildMessage(from, to *mail.Address, subject, text string, now time.Time) ([]byte, error) {
+func buildMessage(from, to *mail.Address, msg Message, now time.Time) ([]byte, error) {
+	subject, text := msg.Subject, msg.Text
 	if strings.ContainsAny(subject, "\r\n") {
 		return nil, errors.New("subject must not contain line breaks")
 	}
@@ -152,18 +165,71 @@ func buildMessage(from, to *mail.Address, subject, text string, now time.Time) (
 	header("Date", now.Format(time.RFC1123Z))
 	header("Message-ID", fmt.Sprintf("<%s@%s>", hex.EncodeToString(id), domain))
 	header("MIME-Version", "1.0")
-	header("Content-Type", "text/plain; charset=UTF-8")
-	header("Content-Transfer-Encoding", "quoted-printable")
-	buf.WriteString("\r\n")
 
-	qp := quotedprintable.NewWriter(&buf)
-	if _, err := qp.Write([]byte(strings.ReplaceAll(text, "\n", "\r\n"))); err != nil {
+	if len(msg.Attachments) == 0 {
+		header("Content-Type", "text/plain; charset=UTF-8")
+		header("Content-Transfer-Encoding", "quoted-printable")
+		buf.WriteString("\r\n")
+		if err := writeQP(&buf, text); err != nil {
+			return nil, err
+		}
+		return buf.Bytes(), nil
+	}
+
+	mw := multipart.NewWriter(&buf)
+	header("Content-Type", mime.FormatMediaType("multipart/mixed", map[string]string{"boundary": mw.Boundary()}))
+	buf.WriteString("\r\n")
+	part, err := mw.CreatePart(textproto.MIMEHeader{
+		"Content-Type":              {"text/plain; charset=UTF-8"},
+		"Content-Transfer-Encoding": {"quoted-printable"},
+	})
+	if err != nil {
 		return nil, err
 	}
-	if err := qp.Close(); err != nil {
+	if err := writeQP(part, text); err != nil {
+		return nil, err
+	}
+	for _, a := range msg.Attachments {
+		if strings.ContainsAny(a.Name+a.ContentType, "\r\n\"") {
+			return nil, errors.New("attachment name and type must not contain quotes or line breaks")
+		}
+		part, err := mw.CreatePart(textproto.MIMEHeader{
+			"Content-Type":              {mime.FormatMediaType(a.ContentType, map[string]string{"name": a.Name})},
+			"Content-Disposition":       {mime.FormatMediaType("attachment", map[string]string{"filename": a.Name})},
+			"Content-Transfer-Encoding": {"base64"},
+		})
+		if err != nil {
+			return nil, err
+		}
+		if err := writeBase64(part, a.Data); err != nil {
+			return nil, err
+		}
+	}
+	if err := mw.Close(); err != nil {
 		return nil, err
 	}
 	return buf.Bytes(), nil
+}
+
+func writeQP(w io.Writer, text string) error {
+	qp := quotedprintable.NewWriter(w)
+	if _, err := qp.Write([]byte(strings.ReplaceAll(text, "\n", "\r\n"))); err != nil {
+		return err
+	}
+	return qp.Close()
+}
+
+// writeBase64 writes data base64-encoded in 76-character lines (RFC 2045).
+func writeBase64(w io.Writer, data []byte) error {
+	enc := base64.StdEncoding.EncodeToString(data)
+	for len(enc) > 0 {
+		n := min(76, len(enc))
+		if _, err := io.WriteString(w, enc[:n]+"\r\n"); err != nil {
+			return err
+		}
+		enc = enc[n:]
+	}
+	return nil
 }
 
 // Log "sends" mail by logging it. Only for local development without an
@@ -174,7 +240,8 @@ type Log struct {
 
 func (l Log) Send(ctx context.Context, msg Message) error {
 	l.Logger.InfoContext(ctx, "email (not sent: SMTP not configured)",
-		slog.String("to", msg.To), slog.String("subject", msg.Subject), slog.String("body", msg.Text))
+		slog.String("to", msg.To), slog.String("subject", msg.Subject), slog.String("body", msg.Text),
+		slog.Int("attachments", len(msg.Attachments)))
 	return nil
 }
 
