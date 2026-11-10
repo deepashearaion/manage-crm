@@ -47,7 +47,9 @@ internal/<module>   one package per business module:
     model.go       types and errors
   auth       users, login, sessions (refresh tokens), password reset
   contacts   contacts, lifecycle stage, lead scores, activity timeline
-  leads      lead intake (forms, WhatsApp, manual), dedupe, scoring, routing
+  leads      lead intake (forms, WhatsApp, manual), dedupe, scoring, routing, lead summaries
+  tasks      to-dos for users (manual, and workflow follow-ups)
+  notifications  in-app inbox and email alerts
   reports    dashboards (read-only queries across modules' tables)
 internal/platform/{config,database,httpx,logging,mail,principal,validate}  shared infrastructure
 internal/apitest  black-box tests for the /api routes
@@ -123,3 +125,32 @@ Scoring criteria: `has_email`, `has_mobile`, `has_company`, `source_equals`,
 `inbound_messages_at_least`. Assignment criteria: `any`, `source_equals`,
 `channel_equals`, `destination_equals`, `temperature_equals`. New orgs get
 eight default scoring rules.
+
+## Rep alerts and tasks (phase 7b)
+
+When a lead's temperature **becomes** hot (at capture, on a WhatsApp reply
+or on a rescore):
+
+- With an owner, the owner gets an urgent `follow_up` task, due after the
+  org's `hot_followup_minutes` (default 15, set in `/api/v1/lead-settings`).
+  Its description is the lead summary: who they are, where they came from,
+  why they scored hot, their last message and the suggested next step
+  (rule-based; times in IST). They also get an in-app `hot_lead`
+  notification and an email linking to `FRONTEND_URL/contacts/{id}`. A
+  contact has at most one open hot-lead task, so a lead that cools and heats
+  up again is re-alerted without duplicating the task.
+- Without an owner, the org's owners, admins and managers are alerted
+  (in-app and email) so someone assigns it.
+
+A new lead that routing assigns (and that is not hot) sends its owner a
+`lead_assigned` notification. A task assigned to someone else sends a
+`task_assigned` notification. Task creation and completion appear on the
+contact timeline.
+
+| Endpoint | Who | Purpose |
+|---|---|---|
+| `GET /api/v1/tasks?status=&assignee_id=&contact_id=&overdue=true&limit=&offset=` | all (reps: own) | Open tasks first, soonest due first |
+| `POST /api/v1/tasks` | writers | Create (`title`, `type`, `priority`, `due_at`, `contact_id`, `assignee_id`: managers+ for others) |
+| `GET/PATCH/DELETE /api/v1/tasks/{id}` | assignee or manager+ | Read, edit (`status`: open, done, cancelled), delete |
+| `GET /api/v1/notifications?unread=true&limit=&before_id=` | self | Inbox plus `unread_count` |
+| `POST /api/v1/notifications/{id}/read`, `POST /api/v1/notifications/read-all` | self | Mark read |

@@ -168,6 +168,9 @@ func validateSettings(s Settings) error {
 	if s.WarmThreshold < 1 || s.WarmThreshold >= s.HotThreshold {
 		return invalid("warm_threshold", "Warm threshold must be at least 1 and below the hot threshold.")
 	}
+	if s.HotFollowupMinutes < 1 || s.HotFollowupMinutes > 10080 {
+		return invalid("hot_followup_minutes", "Follow-up time must be between 1 minute and 7 days (10080).")
+	}
 	return nil
 }
 

@@ -93,6 +93,8 @@ const (
 	KindScoreChanged      = "score_changed"
 	KindOwnerAssigned     = "owner_assigned"
 	KindLifecycleChanged  = "lifecycle_changed"
+	KindTaskCreated       = "task_created"
+	KindTaskCompleted     = "task_completed"
 )
 
 // Activity is one entry on a contact's timeline.
@@ -192,6 +194,23 @@ type Facts struct {
 	InboundMessages int
 	Text            string // notes and recent inbound messages
 	OwnerID         *int64
+
+	// For lead summaries.
+	FirstName          string
+	LastName           string
+	Email              string
+	Mobile             string
+	LastMessage        string // latest inbound message, "" if none
+	LastMessageChannel string
+	LastMessageAt      *time.Time
+}
+
+// SystemActivity is a timeline entry another module records.
+type SystemActivity struct {
+	Kind        string // KindTaskCreated or KindTaskCompleted
+	Summary     string
+	Metadata    map[string]any
+	ActorUserID *int64
 }
 
 var (

@@ -50,9 +50,9 @@ func SeedDefaults(ctx context.Context, tx pgx.Tx, orgID int64) error {
 func (r *Repository) Settings(ctx context.Context, orgID int64) (Settings, error) {
 	var s Settings
 	err := r.db.QueryRow(ctx,
-		`SELECT hot_threshold, warm_threshold, default_owner_id, updated_at FROM lead_settings WHERE org_id = $1`,
+		`SELECT hot_threshold, warm_threshold, default_owner_id, hot_followup_minutes, updated_at FROM lead_settings WHERE org_id = $1`,
 		orgID,
-	).Scan(&s.HotThreshold, &s.WarmThreshold, &s.DefaultOwnerID, &s.UpdatedAt)
+	).Scan(&s.HotThreshold, &s.WarmThreshold, &s.DefaultOwnerID, &s.HotFollowupMinutes, &s.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return DefaultSettings, nil
 	}
@@ -62,14 +62,15 @@ func (r *Repository) Settings(ctx context.Context, orgID int64) (Settings, error
 // SaveSettings stores the org's lead settings.
 func (r *Repository) SaveSettings(ctx context.Context, orgID int64, s Settings) (Settings, error) {
 	err := r.db.QueryRow(ctx,
-		`INSERT INTO lead_settings (org_id, hot_threshold, warm_threshold, default_owner_id, updated_at)
-		VALUES ($1, $2, $3, $4, now())
+		`INSERT INTO lead_settings (org_id, hot_threshold, warm_threshold, default_owner_id, hot_followup_minutes, updated_at)
+		VALUES ($1, $2, $3, $4, $5, now())
 		ON CONFLICT (org_id) DO UPDATE SET
 			hot_threshold = EXCLUDED.hot_threshold, warm_threshold = EXCLUDED.warm_threshold,
-			default_owner_id = EXCLUDED.default_owner_id, updated_at = EXCLUDED.updated_at
-		RETURNING hot_threshold, warm_threshold, default_owner_id, updated_at`,
-		orgID, s.HotThreshold, s.WarmThreshold, s.DefaultOwnerID,
-	).Scan(&s.HotThreshold, &s.WarmThreshold, &s.DefaultOwnerID, &s.UpdatedAt)
+			default_owner_id = EXCLUDED.default_owner_id, hot_followup_minutes = EXCLUDED.hot_followup_minutes,
+			updated_at = EXCLUDED.updated_at
+		RETURNING hot_threshold, warm_threshold, default_owner_id, hot_followup_minutes, updated_at`,
+		orgID, s.HotThreshold, s.WarmThreshold, s.DefaultOwnerID, s.HotFollowupMinutes,
+	).Scan(&s.HotThreshold, &s.WarmThreshold, &s.DefaultOwnerID, &s.HotFollowupMinutes, &s.UpdatedAt)
 	if constraintError(err, "lead_settings_default_owner_same_org_fkey") {
 		return Settings{}, ErrInvalidOwner
 	}

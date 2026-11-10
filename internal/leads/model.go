@@ -68,6 +68,51 @@ type Facts struct {
 	InboundMessages int
 	Text            string
 	OwnerID         *int64
+
+	FirstName          string
+	LastName           string
+	Email              string
+	Mobile             string
+	LastMessage        string
+	LastMessageChannel string
+	LastMessageAt      *time.Time
+}
+
+// Name is the contact's full name.
+func (f Facts) Name() string {
+	if f.LastName == "" {
+		return f.FirstName
+	}
+	return f.FirstName + " " + f.LastName
+}
+
+// HotLead is raised when a contact's temperature becomes hot. OwnerID is
+// nil for an unowned lead.
+type HotLead struct {
+	OrgID       int64
+	ContactID   int64
+	OwnerID     *int64
+	Name        string
+	Score       int
+	Summary     string
+	FollowUpDue time.Time
+}
+
+// LeadAssigned is raised when routing gives a new lead to a user.
+type LeadAssigned struct {
+	OrgID     int64
+	ContactID int64
+	OwnerID   int64
+	Name      string
+	Reason    string
+}
+
+// Events receives the workflow events this module raises; internal/app
+// turns them into tasks and notifications. A failing handler is logged and
+// does not undo the capture.
+type Events interface {
+	LeadTurnedHot(ctx context.Context, e HotLead) error
+	LeadAssigned(ctx context.Context, e LeadAssigned) error
 }
 
 // Score is a computed lead score.
@@ -107,14 +152,16 @@ type Result struct {
 
 // Settings are an org's lead settings.
 type Settings struct {
-	HotThreshold   int       `json:"hot_threshold"`
-	WarmThreshold  int       `json:"warm_threshold"`
-	DefaultOwnerID *int64    `json:"default_owner_id"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	HotThreshold   int    `json:"hot_threshold"`
+	WarmThreshold  int    `json:"warm_threshold"`
+	DefaultOwnerID *int64 `json:"default_owner_id"`
+	// HotFollowupMinutes is how soon a hot lead's follow-up task is due.
+	HotFollowupMinutes int       `json:"hot_followup_minutes"`
+	UpdatedAt          time.Time `json:"updated_at"`
 }
 
 // DefaultSettings apply to orgs that have not changed theirs.
-var DefaultSettings = Settings{HotThreshold: 70, WarmThreshold: 40}
+var DefaultSettings = Settings{HotThreshold: 70, WarmThreshold: 40, HotFollowupMinutes: 15}
 
 // Source is a web form or API integration that submits leads.
 type Source struct {

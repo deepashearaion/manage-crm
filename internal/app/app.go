@@ -15,10 +15,12 @@ import (
 	"github.com/deepashearaion/manage-crm/internal/contacts"
 	"github.com/deepashearaion/manage-crm/internal/deals"
 	"github.com/deepashearaion/manage-crm/internal/leads"
+	"github.com/deepashearaion/manage-crm/internal/notifications"
 	"github.com/deepashearaion/manage-crm/internal/platform/config"
 	"github.com/deepashearaion/manage-crm/internal/platform/httpx"
 	"github.com/deepashearaion/manage-crm/internal/platform/mail"
 	"github.com/deepashearaion/manage-crm/internal/reports"
+	"github.com/deepashearaion/manage-crm/internal/tasks"
 )
 
 const maxRequestBodyBytes = 1 << 20 // 1 MiB
@@ -58,7 +60,15 @@ func NewHandler(d Deps) http.Handler {
 	contactService := contacts.NewService(contacts.NewRepository(d.DB))
 	contacts.Routes(router, contacts.NewHandler(contactService, d.Logger), requireUser, requireUserV1)
 
-	leadService := leads.NewService(leads.NewRepository(d.DB), leadsContacts{svc: contactService}, d.Logger)
+	notificationService := notifications.NewService(d.DB, userDirectory{users: authService}, d.Mailer, cfg.FrontendURL, d.Logger)
+	notifications.Routes(router, notifications.NewHandler(notificationService, d.Logger), requireUserV1)
+
+	taskService := tasks.NewService(tasks.NewRepository(d.DB), tasksContacts{svc: contactService},
+		tasksNotifier{notifications: notificationService}, d.Logger)
+	tasks.Routes(router, tasks.NewHandler(taskService, d.Logger), requireUserV1)
+
+	leadService := leads.NewService(leads.NewRepository(d.DB), leadsContacts{svc: contactService},
+		workflowEvents{tasks: taskService, notifications: notificationService, users: authService}, d.Logger)
 	leads.Routes(router, leads.NewHandler(leadService, d.Logger, leads.WhatsAppSettings{
 		AppSecret:   cfg.WhatsApp.AppSecret,
 		VerifyToken: cfg.WhatsApp.VerifyToken,

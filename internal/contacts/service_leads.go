@@ -39,6 +39,18 @@ func (s *Service) AssignOwner(ctx context.Context, orgID, contactID, userID int6
 	return s.repo.AssignOwner(ctx, orgID, contactID, userID, reason)
 }
 
+// AddSystemActivity puts another module's event on a contact's timeline.
+// Only task events are accepted; other kinds belong to this module.
+func (s *Service) AddSystemActivity(ctx context.Context, orgID, contactID int64, a SystemActivity) error {
+	if a.Kind != KindTaskCreated && a.Kind != KindTaskCompleted {
+		return ErrInvalidKind
+	}
+	return s.repo.AddSystemActivity(ctx, newActivity{
+		OrgID: orgID, ContactID: contactID, Kind: a.Kind, Channel: ChannelSystem,
+		Summary: a.Summary, Metadata: a.Metadata, ActorUserID: a.ActorUserID,
+	})
+}
+
 // Caller operations, for /api/v1.
 
 // Visible returns the contact if p may see it, otherwise ErrNotFound.

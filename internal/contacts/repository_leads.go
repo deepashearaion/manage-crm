@@ -217,16 +217,41 @@ func (r *Repository) Facts(ctx context.Context, orgID, contactID int64) (Facts, 
 					WHERE a.contact_id = c.id AND a.kind = 'message' AND a.direction = 'inbound'
 					ORDER BY a.occurred_at DESC, a.id DESC LIMIT 20
 				) m
-			))
+			)),
+			c.first_name,
+			COALESCE(c.last_name, ''),
+			COALESCE(c.email, ''),
+			COALESCE(c.mobile, ''),
+			COALESCE(last.body, ''),
+			COALESCE(last.channel, ''),
+			last.occurred_at
 		FROM contacts c
+		LEFT JOIN LATERAL (
+			SELECT a.body, a.channel, a.occurred_at FROM contact_activities a
+			WHERE a.contact_id = c.id AND a.kind = 'message' AND a.direction = 'inbound'
+			ORDER BY a.occurred_at DESC, a.id DESC LIMIT 1
+		) last ON true
 		WHERE c.org_id = $1 AND c.id = $2`,
 		orgID, contactID,
 	).Scan(&f.Source, &f.Destination, &f.HasEmail, &f.HasMobile, &f.HasCompany, &f.OwnerID,
-		&f.Channels, &f.InboundMessages, &f.Text)
+		&f.Channels, &f.InboundMessages, &f.Text,
+		&f.FirstName, &f.LastName, &f.Email, &f.Mobile, &f.LastMessage, &f.LastMessageChannel, &f.LastMessageAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Facts{}, ErrNotFound
 	}
 	return f, err
+}
+
+// AddSystemActivity records something another module did with a contact
+// (a task created or completed). It returns ErrNotFound if the contact is
+// not in orgID.
+func (r *Repository) AddSystemActivity(ctx context.Context, a newActivity) error {
+	_, _, err := insertActivity(ctx, r.db, a)
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+		return ErrNotFound
+	}
+	return err
 }
 
 // SaveScore stores a contact's score and, when its temperature changes (or

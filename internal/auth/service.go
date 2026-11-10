@@ -272,3 +272,17 @@ func (s *Service) ChangeRole(ctx context.Context, p principal.Principal, userID 
 	}
 	return s.repo.SetRole(ctx, p.OrgID, userID, role)
 }
+
+// System lookups for other modules (wired in internal/app), e.g. to find
+// whom to notify. They never expose password hashes outside this module's
+// User type, which callers map to their own types.
+
+// OrgUser returns a user of orgID, or ErrUserNotFound.
+func (s *Service) OrgUser(ctx context.Context, orgID, userID int64) (User, error) {
+	return s.repo.UserInOrg(ctx, orgID, userID)
+}
+
+// OrgUsers lists the users of orgID.
+func (s *Service) OrgUsers(ctx context.Context, orgID int64) ([]User, error) {
+	return s.repo.UsersInOrg(ctx, orgID)
+}

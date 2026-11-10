@@ -51,6 +51,8 @@ func (c leadsContacts) Facts(ctx context.Context, orgID, contactID int64) (leads
 		Source: f.Source, Destination: f.Destination, HasEmail: f.HasEmail, HasMobile: f.HasMobile,
 		HasCompany: f.HasCompany, Channels: f.Channels, InboundMessages: f.InboundMessages,
 		Text: f.Text, OwnerID: f.OwnerID,
+		FirstName: f.FirstName, LastName: f.LastName, Email: f.Email, Mobile: f.Mobile,
+		LastMessage: f.LastMessage, LastMessageChannel: f.LastMessageChannel, LastMessageAt: f.LastMessageAt,
 	}, nil
 }
 

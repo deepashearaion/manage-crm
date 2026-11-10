@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/deepashearaion/manage-crm/internal/platform/principal"
@@ -13,13 +14,20 @@ import (
 )
 
 type Service struct {
-	repo     *Repository
-	contacts Contacts
-	logger   *slog.Logger
+	repo       *Repository
+	contacts   Contacts
+	events     Events
+	summarizer Summarizer
+	logger     *slog.Logger
+	now        func() time.Time
 }
 
-func NewService(repo *Repository, contacts Contacts, logger *slog.Logger) *Service {
-	return &Service{repo: repo, contacts: contacts, logger: logger}
+// NewService builds the service. events may be nil (no workflow reactions).
+func NewService(repo *Repository, contacts Contacts, events Events, logger *slog.Logger) *Service {
+	return &Service{
+		repo: repo, contacts: contacts, events: events, summarizer: RuleSummarizer{},
+		logger: logger, now: time.Now,
+	}
 }
 
 // Field limits, matching the contacts table.
@@ -77,22 +85,68 @@ func (s *Service) Capture(ctx context.Context, orgID int64, l Lead) (Result, err
 		return res, nil
 	}
 
-	score, err := s.rescore(ctx, orgID, c.ContactID)
+	sc, err := s.rescore(ctx, orgID, c.ContactID)
 	if err != nil {
 		return Result{}, err
 	}
-	res.Score, res.Temperature, res.Reasons = score.Score, score.Temperature, score.Reasons
+	res.Score, res.Temperature, res.Reasons = sc.score.Score, sc.score.Temperature, sc.score.Reasons
 
+	reason := ""
 	if c.OwnerID == nil {
-		owner, err := s.route(ctx, orgID, c.ContactID, routingAttrs{
-			Source: l.Source, Channel: l.Channel, Destination: l.Destination, Temperature: score.Temperature,
+		owner, why, err := s.route(ctx, orgID, c.ContactID, routingAttrs{
+			Source: l.Source, Channel: l.Channel, Destination: l.Destination, Temperature: sc.score.Temperature,
 		})
 		if err != nil {
 			return Result{}, err
 		}
-		res.OwnerID = owner
+		res.OwnerID, reason = owner, why
+	}
+
+	// Workflow reactions: a lead that just turned hot alerts its owner
+	// (the hot alert covers a fresh assignment too); otherwise a routed
+	// lead tells its new owner.
+	switch {
+	case sc.turnedHot():
+		s.raiseHot(ctx, orgID, c.ContactID, res.OwnerID, sc)
+	case reason != "":
+		s.raise(ctx, "lead assigned", func() error {
+			return s.events.LeadAssigned(ctx, LeadAssigned{
+				OrgID: orgID, ContactID: c.ContactID, OwnerID: *res.OwnerID, Name: sc.facts.Name(), Reason: reason,
+			})
+		})
 	}
 	return res, nil
+}
+
+// scored is the outcome of rescoring a contact.
+type scored struct {
+	score    Score
+	previous string // temperature before, "" if never scored
+	facts    Facts
+	settings Settings
+}
+
+func (s scored) turnedHot() bool { return s.score.Temperature == Hot && s.previous != Hot }
+
+func (s *Service) raiseHot(ctx context.Context, orgID, contactID int64, owner *int64, sc scored) {
+	s.raise(ctx, "lead turned hot", func() error {
+		return s.events.LeadTurnedHot(ctx, HotLead{
+			OrgID: orgID, ContactID: contactID, OwnerID: owner, Name: sc.facts.Name(), Score: sc.score.Score,
+			Summary:     s.summarizer.Summarize(sc.facts, sc.score, sc.settings.HotFollowupMinutes),
+			FollowUpDue: s.now().Add(time.Duration(sc.settings.HotFollowupMinutes) * time.Minute).UTC(),
+		})
+	})
+}
+
+// raise runs an event handler, logging failures: the lead is already
+// captured, and reporting an error would make webhooks retry needlessly.
+func (s *Service) raise(ctx context.Context, what string, fn func() error) {
+	if s.events == nil {
+		return
+	}
+	if err := fn(); err != nil {
+		s.logger.ErrorContext(ctx, "workflow event failed", slog.String("event", what), slog.Any("error", err))
+	}
 }
 
 // CaptureByUser is POST /api/v1/leads: a signed-in user entering a lead.
@@ -137,40 +191,44 @@ func (s *Service) Rescore(ctx context.Context, p principal.Principal, contactID 
 	if err != nil {
 		return Result{}, err
 	}
-	score, err := s.rescore(ctx, p.OrgID, contactID)
+	sc, err := s.rescore(ctx, p.OrgID, contactID)
 	if err != nil {
 		return Result{}, err
 	}
-	return Result{ContactID: contactID, Score: score.Score, Temperature: score.Temperature, Reasons: score.Reasons, OwnerID: owner}, nil
+	if sc.turnedHot() {
+		s.raiseHot(ctx, p.OrgID, contactID, owner, sc)
+	}
+	return Result{ContactID: contactID, Score: sc.score.Score, Temperature: sc.score.Temperature, Reasons: sc.score.Reasons, OwnerID: owner}, nil
 }
 
-func (s *Service) rescore(ctx context.Context, orgID, contactID int64) (Score, error) {
+func (s *Service) rescore(ctx context.Context, orgID, contactID int64) (scored, error) {
 	settings, err := s.repo.Settings(ctx, orgID)
 	if err != nil {
-		return Score{}, err
+		return scored{}, err
 	}
 	rules, err := s.repo.ScoringRules(ctx, orgID)
 	if err != nil {
-		return Score{}, err
+		return scored{}, err
 	}
 	facts, err := s.contacts.Facts(ctx, orgID, contactID)
 	if err != nil {
-		return Score{}, err
+		return scored{}, err
 	}
 	score := Evaluate(rules, facts, settings)
-	if _, err := s.contacts.SaveScore(ctx, orgID, contactID, score); err != nil {
-		return Score{}, err
+	previous, err := s.contacts.SaveScore(ctx, orgID, contactID, score)
+	if err != nil {
+		return scored{}, err
 	}
-	return score, nil
+	return scored{score: score, previous: previous, facts: facts, settings: settings}, nil
 }
 
 // route assigns a new lead to the next member of the first matching
 // assignment rule, or to the org's default owner. It returns the owner, or
-// nil when nothing applies (managers then assign by hand).
-func (s *Service) route(ctx context.Context, orgID, contactID int64, a routingAttrs) (*int64, error) {
+// nil when nothing applies (managers then assign by hand), and why.
+func (s *Service) route(ctx context.Context, orgID, contactID int64, a routingAttrs) (*int64, string, error) {
 	rules, err := s.repo.AssignmentRules(ctx, orgID)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	var owner int64
 	reason := ""
@@ -179,7 +237,7 @@ func (s *Service) route(ctx context.Context, orgID, contactID int64, a routingAt
 			continue
 		}
 		if owner, err = s.repo.NextMember(ctx, orgID, rule); err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		reason = "Assignment rule: " + rule.Name
 		break
@@ -187,18 +245,18 @@ func (s *Service) route(ctx context.Context, orgID, contactID int64, a routingAt
 	if reason == "" {
 		settings, err := s.repo.Settings(ctx, orgID)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		if settings.DefaultOwnerID == nil {
-			return nil, nil
+			return nil, "", nil
 		}
 		owner, reason = *settings.DefaultOwnerID, "Default owner"
 	}
 	assigned, err := s.contacts.AssignOwner(ctx, orgID, contactID, owner, reason)
 	if err != nil || !assigned {
-		return nil, err
+		return nil, "", err
 	}
-	return &owner, nil
+	return &owner, reason, nil
 }
 
 // Configuration. Reading and changing it needs principal.ManagesSettings.
@@ -220,10 +278,11 @@ func (s *Service) Settings(ctx context.Context, p principal.Principal) (Settings
 // SettingsPatch lists settings to change; nil fields are unchanged.
 // ClearDefaultOwner removes the default owner.
 type SettingsPatch struct {
-	HotThreshold      *int   `json:"hot_threshold"`
-	WarmThreshold     *int   `json:"warm_threshold"`
-	DefaultOwnerID    *int64 `json:"default_owner_id"`
-	ClearDefaultOwner bool   `json:"clear_default_owner"`
+	HotThreshold       *int   `json:"hot_threshold"`
+	WarmThreshold      *int   `json:"warm_threshold"`
+	DefaultOwnerID     *int64 `json:"default_owner_id"`
+	ClearDefaultOwner  bool   `json:"clear_default_owner"`
+	HotFollowupMinutes *int   `json:"hot_followup_minutes"`
 }
 
 func (s *Service) UpdateSettings(ctx context.Context, p principal.Principal, patch SettingsPatch) (Settings, error) {
@@ -239,6 +298,9 @@ func (s *Service) UpdateSettings(ctx context.Context, p principal.Principal, pat
 	}
 	if patch.DefaultOwnerID != nil {
 		cur.DefaultOwnerID = patch.DefaultOwnerID
+	}
+	if patch.HotFollowupMinutes != nil {
+		cur.HotFollowupMinutes = *patch.HotFollowupMinutes
 	}
 	if patch.ClearDefaultOwner {
 		cur.DefaultOwnerID = nil
