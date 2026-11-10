@@ -46,6 +46,8 @@ type Config struct {
 
 	SMTP SMTP
 
+	WhatsApp WhatsApp
+
 	// ReturnResetTokenInResponse keeps the legacy forgot-password response
 	// (token in the JSON body) for the current frontend. Development only.
 	ReturnResetTokenInResponse bool
@@ -61,6 +63,20 @@ type SMTP struct {
 	Pass string
 	From string
 }
+
+// WhatsApp holds the Meta WhatsApp Cloud API settings. The inbound webhook
+// needs AppSecret (to verify payload signatures) and VerifyToken (for Meta's
+// subscription handshake); sending messages needs AccessToken and
+// PhoneNumberID. All are optional: without them WhatsApp is off.
+type WhatsApp struct {
+	AppSecret     string // WHATSAPP_APP_SECRET
+	VerifyToken   string // WHATSAPP_VERIFY_TOKEN
+	AccessToken   string // WHATSAPP_TOKEN
+	PhoneNumberID string // WHATSAPP_PHONE_NUMBER_ID
+}
+
+// WebhookEnabled reports whether inbound WhatsApp messages are accepted.
+func (w WhatsApp) WebhookEnabled() bool { return w.AppSecret != "" && w.VerifyToken != "" }
 
 // Enabled reports whether an SMTP server is configured.
 func (s SMTP) Enabled() bool { return s.Host != "" }
@@ -133,6 +149,12 @@ func FromEnv(getenv func(string) string) (*Config, error) {
 			From: get("SMTP_FROM", ""),
 		},
 		ReturnResetTokenInResponse: boolean("RETURN_RESET_TOKEN_IN_RESPONSE"),
+		WhatsApp: WhatsApp{
+			AppSecret:     getenv("WHATSAPP_APP_SECRET"),
+			VerifyToken:   getenv("WHATSAPP_VERIFY_TOKEN"),
+			AccessToken:   getenv("WHATSAPP_TOKEN"),
+			PhoneNumberID: get("WHATSAPP_PHONE_NUMBER_ID", ""),
+		},
 	}
 
 	switch c.Env {
@@ -198,6 +220,13 @@ func FromEnv(getenv func(string) string) (*Config, error) {
 	} else if !c.IsDevelopment() && c.Env != EnvTest {
 		// Without SMTP, password-reset emails could not be delivered.
 		errs = append(errs, errors.New("SMTP_HOST is required outside development"))
+	}
+
+	if (c.WhatsApp.AppSecret == "") != (c.WhatsApp.VerifyToken == "") {
+		errs = append(errs, errors.New("WHATSAPP_APP_SECRET and WHATSAPP_VERIFY_TOKEN must be set together (the webhook needs both)"))
+	}
+	if (c.WhatsApp.AccessToken == "") != (c.WhatsApp.PhoneNumberID == "") {
+		errs = append(errs, errors.New("WHATSAPP_TOKEN and WHATSAPP_PHONE_NUMBER_ID must be set together (sending needs both)"))
 	}
 
 	duration := func(key string, fallback, minimum, maximum time.Duration) time.Duration {

@@ -58,6 +58,12 @@ func (p Principal) CanReassign() bool {
 	return p.Role == RoleOwner || p.Role == RoleAdmin || p.Role == RoleManager
 }
 
+// ManagesSettings reports whether p may change org-wide configuration such
+// as lead sources, scoring rules and routing rules.
+func (p Principal) ManagesSettings() bool {
+	return p.Role == RoleOwner || p.Role == RoleAdmin || p.Role == RoleManager
+}
+
 // CanWriteRecord reports whether p may change or delete a record owned by
 // ownerID (nil when the record has no owner).
 func (p Principal) CanWriteRecord(ownerID *int64) bool {

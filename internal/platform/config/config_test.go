@@ -72,7 +72,9 @@ func TestFromEnvRejects(t *testing.T) {
 		"reset token flag in staging": {map[string]string{
 			"APP_ENV": "staging", "RETURN_RESET_TOKEN_IN_RESPONSE": "true",
 		}, "only allowed when APP_ENV=development"},
-		"bad boolean": {map[string]string{"RETURN_RESET_TOKEN_IN_RESPONSE": "yes please"}, "not a boolean"},
+		"bad boolean":                          {map[string]string{"RETURN_RESET_TOKEN_IN_RESPONSE": "yes please"}, "not a boolean"},
+		"whatsapp secret without verify token": {map[string]string{"WHATSAPP_APP_SECRET": "s"}, "WHATSAPP_VERIFY_TOKEN"},
+		"whatsapp token without phone id":      {map[string]string{"WHATSAPP_TOKEN": "t"}, "WHATSAPP_PHONE_NUMBER_ID"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
