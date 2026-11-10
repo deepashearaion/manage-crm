@@ -95,10 +95,13 @@ func (s *Service) process(ctx context.Context, e Enrollment, cache map[int64]Seq
 	if err != nil {
 		return err
 	}
+	// Onboarding (deal_won) messages are transactional: they go to customers,
+	// and marketing opt-outs only block their WhatsApp steps.
+	transactional := seq.Trigger == TriggerDealWon
 	switch {
-	case rc.OptedOut:
+	case rc.OptedOut && !transactional:
 		return s.finish(ctx, e, StopOptedOut)
-	case rc.LifecycleStage == "customer":
+	case rc.LifecycleStage == "customer" && !transactional:
 		return s.finish(ctx, e, StopCustomer)
 	}
 	if quiet, until := inQuietHours(now); quiet {
@@ -106,8 +109,12 @@ func (s *Service) process(ctx context.Context, e Enrollment, cache map[int64]Seq
 	}
 
 	step := seq.Steps[e.NextStep]
-	summary := fmt.Sprintf("Nurture: %s, step %d of %d", seq.Name, e.NextStep+1, len(seq.Steps))
-	body, externalID, err := s.send(ctx, e, step, rc, now)
+	label := "Nurture"
+	if transactional {
+		label = "Onboarding"
+	}
+	summary := fmt.Sprintf("%s: %s, step %d of %d", label, seq.Name, e.NextStep+1, len(seq.Steps))
+	body, externalID, err := s.send(ctx, e, step, rc, now, transactional)
 	var sk skip
 	switch {
 	case errors.As(err, &sk):
@@ -129,20 +136,26 @@ func (s *Service) process(ctx context.Context, e Enrollment, cache map[int64]Seq
 
 // send delivers one step and returns the text sent and the channel's
 // message id.
-func (s *Service) send(ctx context.Context, e Enrollment, step Step, rc Recipient, now time.Time) (string, string, error) {
+func (s *Service) send(ctx context.Context, e Enrollment, step Step, rc Recipient, now time.Time, transactional bool) (string, string, error) {
 	switch step.Channel {
 	case ChannelEmail:
 		if rc.Email == "" {
 			return "", "", skip{"no email address"}
 		}
 		body := render(step.Body, rc)
-		text := body + "\n\n--\nTo stop receiving these messages: " + s.unsubscribeURL(e.orgID, e.ContactID)
+		text := body
+		if !transactional {
+			text += "\n\n--\nTo stop receiving these messages: " + s.unsubscribeURL(e.orgID, e.ContactID)
+		}
 		err := s.mailer.Send(ctx, mail.Message{To: rc.Email, Subject: render(step.Subject, rc), Text: text})
 		return body, "", err
 
 	case ChannelWhatsApp:
 		if rc.PhoneKey == "" {
 			return "", "", skip{"no mobile number"}
+		}
+		if rc.OptedOut {
+			return "", "", skip{"the contact opted out of WhatsApp messages"}
 		}
 		from, err := s.numbers.SenderNumber(ctx, e.orgID)
 		if errors.Is(err, ErrNoWhatsAppNumber) {

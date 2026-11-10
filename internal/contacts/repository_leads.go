@@ -576,3 +576,16 @@ func (r *Repository) OptOut(ctx context.Context, orgID, id int64, via string) er
 		return err
 	})
 }
+
+// Customer returns a contact's name, email and mobile as entered.
+func (r *Repository) Customer(ctx context.Context, orgID, id int64) (string, string, string, error) {
+	var name, email, mobile string
+	err := r.db.QueryRow(ctx,
+		`SELECT concat_ws(' ', first_name, NULLIF(last_name, '')), COALESCE(email, ''), COALESCE(mobile, '')
+		FROM contacts WHERE org_id = $1 AND id = $2`, orgID, id,
+	).Scan(&name, &email, &mobile)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", "", "", ErrNotFound
+	}
+	return name, email, mobile, err
+}

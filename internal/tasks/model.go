@@ -17,9 +17,10 @@ const (
 	StatusDone      = "done"
 	StatusCancelled = "cancelled"
 
-	OriginManual   = "manual"
-	OriginHotLead  = "hot_lead"
-	OriginDealLost = "deal_lost"
+	OriginManual        = "manual"
+	OriginHotLead       = "hot_lead"
+	OriginDealLost      = "deal_lost"
+	OriginInvoiceReview = "invoice_review"
 )
 
 var (

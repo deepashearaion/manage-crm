@@ -133,7 +133,7 @@ func (s *Service) enroll(ctx context.Context, orgID int64, seq Sequence, contact
 	if err != nil {
 		return Enrollment{}, err
 	}
-	if rc.OptedOut {
+	if rc.OptedOut && seq.Trigger != TriggerDealWon {
 		return Enrollment{}, fieldErr("contact_id", "invalid", "This contact opted out of marketing messages.")
 	}
 	first := s.now().Add(time.Duration(seq.Steps[0].DelayMinutes) * time.Minute)

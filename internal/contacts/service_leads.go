@@ -183,3 +183,8 @@ func (s *Service) RecordOutbound(ctx context.Context, orgID, contactID int64, m 
 		Summary: m.Summary, Body: m.Body, ExternalID: m.ExternalID, Metadata: m.Metadata,
 	})
 }
+
+// Customer returns a contact's full name, email and mobile for invoicing.
+func (s *Service) Customer(ctx context.Context, orgID, contactID int64) (name, email, mobile string, err error) {
+	return s.repo.Customer(ctx, orgID, contactID)
+}

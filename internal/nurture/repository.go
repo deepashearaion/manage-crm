@@ -203,6 +203,8 @@ func (r *Repository) StopForContact(ctx context.Context, orgID, contactID int64,
 		FROM nurture_sequences s
 		WHERE s.id = e.sequence_id AND e.org_id = $1 AND e.contact_id = $2 AND e.status = 'active'
 			AND (NOT $4 OR s.stop_on_reply)
+			-- onboarding sequences stop only on reply (if set), never on hot/won/opt-out
+			AND (s.trigger <> 'deal_won' OR $4)
 		RETURNING `+enrollmentColumns,
 		orgID, contactID, reason, onlyStopOnReply)
 	if err != nil {

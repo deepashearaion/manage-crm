@@ -235,6 +235,7 @@ const (
 var systemKinds = []string{
 	KindTaskCreated, KindTaskCompleted, KindDealCreated, KindDealStageChanged, KindDealWon, KindDealLost,
 	KindNurtureEnrolled, KindNurtureStopped,
+	"invoice_issued", "invoice_sent", "invoice_cancelled",
 }
 
 // Nurture events on the timeline.

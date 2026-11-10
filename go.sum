@@ -23,6 +23,10 @@ github.com/mfridman/interpolate v0.0.2 h1:pnuTK7MQIxxFz1Gr+rjSIx9u7qVjf5VOoM/u6B
 github.com/mfridman/interpolate v0.0.2/go.mod h1:p+7uk6oE07mpE/Ik1b8EckO0O4ZXiGAfshKBWLUM9Xg=
 github.com/ncruces/go-strftime v1.1.0 h1:vtPmPWMkb539RGV9WpWT9EwJGvrOCKvMNI4obWL47Hk=
 github.com/ncruces/go-strftime v1.1.0/go.mod h1:yVaq7iwCN09vHRrKBrrflXT0M9tTMG2KmZ9Fj7xeG/g=
+github.com/phpdave11/gofpdi v1.0.14-0.20211212211723-1f10f9844311 h1:zyWXQ6vu27ETMpYsEMAsisQ+GqJ4e1TPvSNfdOPF0no=
+github.com/phpdave11/gofpdi v1.0.14-0.20211212211723-1f10f9844311/go.mod h1:vBmVV0Do6hSBHC8uKUQ71JGW+ZGQq74llk/7bXwjDoI=
+github.com/pkg/errors v0.8.1 h1:iURUrRGxPUNPdy5/HRSm+Yj6okJ6UtLINN0Q9M4+h3I=
+github.com/pkg/errors v0.8.1/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/pressly/goose/v3 v3.29.0 h1:dtEnBCT7CqkHIUCdgrXsrmeisaN8gFkRU4Y5OEwif4o=
 github.com/pressly/goose/v3 v3.29.0/go.mod h1:plA4aP4+u+Q3FMTgbFbhF8TuAWpAdfWpoFGkJsIFWh0=
@@ -30,6 +34,8 @@ github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec h1:W09IVJc94
 github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec/go.mod h1:qqbHyh8v60DhA7CoWK5oRCqLrMHRGoxYCSS9EjAz6Eo=
 github.com/sethvargo/go-retry v0.5.0 h1:JYfFKmVJ8ER06GReN1efzc5cm52BrVsFVzmcHiKJwfY=
 github.com/sethvargo/go-retry v0.5.0/go.mod h1:tvsjdKG6xfiCx4LSiUZ06kcv38xvdVQwv8R6/VnnVWg=
+github.com/signintech/gopdf v0.38.4 h1:ivEw3SL20yciygH0vBeH4TUxLsPep2U+zDEagabNXUY=
+github.com/signintech/gopdf v0.38.4/go.mod h1:d23eO35GpEliSrF22eJ4bsM3wVeQJTjXTHq5x5qGKjA=
 github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+wExME=
 github.com/stretchr/testify v1.3.0/go.mod h1:M5WIy9Dh21IEIfnGCwXGc5bZfKNJtfHm1UVUgZn+9EI=
 github.com/stretchr/testify v1.7.0/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/h/Wwjteg=

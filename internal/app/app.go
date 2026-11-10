@@ -15,6 +15,7 @@ import (
 	"github.com/deepashearaion/manage-crm/internal/auth"
 	"github.com/deepashearaion/manage-crm/internal/contacts"
 	"github.com/deepashearaion/manage-crm/internal/deals"
+	"github.com/deepashearaion/manage-crm/internal/invoices"
 	"github.com/deepashearaion/manage-crm/internal/leads"
 	"github.com/deepashearaion/manage-crm/internal/notifications"
 	"github.com/deepashearaion/manage-crm/internal/nurture"
@@ -104,7 +105,15 @@ func New(d Deps) *App {
 		d.Mailer, d.WhatsApp, nurture.Settings{FrontendURL: cfg.FrontendURL, UnsubscribeKey: cfg.JWTSecret}, d.Logger, d.Now)
 	nurture.Routes(router, nurture.NewHandler(nurtureService, d.Logger), requireUserV1)
 
-	events := workflowEvents{tasks: taskService, notifications: notificationService, users: authService, nurture: nurtureService}
+	// Invoices look deals up through dealsForInvoices, bound once the deals
+	// service exists (deals raise the events that create invoices).
+	dealsForInvoices := &invoicesDeals{}
+	invoiceService := invoices.NewService(invoices.NewRepository(d.DB), invoicesContacts{svc: contactService},
+		dealsForInvoices, d.Mailer, d.Logger, d.Now)
+	invoices.Routes(router, invoices.NewHandler(invoiceService, d.Logger), requireUserV1)
+
+	events := workflowEvents{tasks: taskService, notifications: notificationService, users: authService,
+		nurture: nurtureService, invoices: invoiceService}
 
 	leadService := leads.NewService(leads.NewRepository(d.DB), leadsContacts{svc: contactService}, events, d.Logger)
 	numbers.leads = leadService
@@ -114,6 +123,7 @@ func New(d Deps) *App {
 	}), requireUserV1)
 
 	dealService := deals.NewService(deals.NewRepository(d.DB), dealsContacts{svc: contactService}, events, d.Logger)
+	dealsForInvoices.svc = dealService
 	deals.Routes(router, deals.NewHandler(dealService, d.Logger), requireUserV1)
 
 	reports.Routes(router,

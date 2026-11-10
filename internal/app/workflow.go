@@ -9,6 +9,7 @@ import (
 	"github.com/deepashearaion/manage-crm/internal/auth"
 	"github.com/deepashearaion/manage-crm/internal/contacts"
 	"github.com/deepashearaion/manage-crm/internal/deals"
+	"github.com/deepashearaion/manage-crm/internal/invoices"
 	"github.com/deepashearaion/manage-crm/internal/leads"
 	"github.com/deepashearaion/manage-crm/internal/notifications"
 	"github.com/deepashearaion/manage-crm/internal/nurture"
@@ -27,6 +28,7 @@ type workflowEvents struct {
 	notifications *notifications.Service
 	users         *auth.Service
 	nurture       *nurture.Service
+	invoices      *invoices.Service
 }
 
 var _ leads.Events = workflowEvents{}
@@ -173,14 +175,44 @@ const recontactAfter = 30 * 24 * time.Hour
 
 var _ deals.Events = workflowEvents{}
 
-// DealWon takes the new customer out of nurture. Onboarding (welcome
-// message, invoice) arrives in phase 7e.
+// DealWon is the diagram's "Auto onboarding": the new customer leaves
+// nurture and enters the org's deal_won (welcome) sequence, and the deal
+// gets a draft invoice with a review task for its owner, who checks it and
+// issues it. Every step runs even if an earlier one fails.
 func (w workflowEvents) DealWon(ctx context.Context, o deals.Outcome) error {
-	if o.ContactID == nil {
-		return nil
+	var errs []error
+	if o.ContactID != nil {
+		errs = append(errs, w.nurture.StopForContact(ctx, o.OrgID, *o.ContactID, nurture.StopWon, false))
+		_, err := w.nurture.AutoEnroll(ctx, o.OrgID, *o.ContactID, nurture.TriggerDealWon)
+		errs = append(errs, err)
 	}
-	return w.nurture.StopForContact(ctx, o.OrgID, *o.ContactID, nurture.StopWon, false)
+
+	inv, created, err := w.invoices.CreateForWonDeal(ctx, o.OrgID, invoices.Deal{
+		ID: o.DealID, Title: o.Title, ContactID: o.ContactID, OwnerID: o.OwnerID,
+		AmountPaise: o.AmountPaise, BillingType: o.BillingType, BillingPeriod: o.BillingPeriod,
+	})
+	errs = append(errs, err)
+	if created && o.OwnerID != nil && o.ContactID != nil {
+		due := o.ClosedAt.Add(24 * time.Hour)
+		_, _, err := w.tasks.CreateWorkflow(ctx, o.OrgID, tasks.SystemTask{
+			ContactID:  *o.ContactID,
+			AssigneeID: *o.OwnerID,
+			Title:      "Review and issue invoice: " + o.Title,
+			Description: fmt.Sprintf("A draft invoice (id %d, %s) was created for the won deal %q.\n"+
+				"Check the customer's billing address, GSTIN and place of supply, and each line's SAC code and GST rate, "+
+				"then issue it and email it to the customer.", inv.ID, formatPaise(inv.TotalPaise), o.Title),
+			Type:     "todo",
+			Priority: "high",
+			Origin:   tasks.OriginInvoiceReview,
+			DueAt:    &due,
+		})
+		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
 }
+
+// formatPaise formats paise as rupees, e.g. ₹47,250.00 (no lakh grouping).
+func formatPaise(p int64) string { return fmt.Sprintf("₹%d.%02d", p/100, p%100) }
 
 // DealLost sends the contact back to nurture: into the org's active
 // deal_lost sequence (whose first step's delay is the "re-contact after 30
@@ -328,4 +360,54 @@ func (n tasksNotifier) TaskOverdue(ctx context.Context, orgID int64, t tasks.Tas
 
 func (c leadsContacts) OptOut(ctx context.Context, orgID, contactID int64, via string) error {
 	return mapContactErr(c.svc.OptOut(ctx, orgID, contactID, via))
+}
+
+// invoicesContacts gives the invoices module contact visibility, customer
+// details and timeline entries (invoices.Contacts).
+type invoicesContacts struct {
+	svc *contacts.Service
+}
+
+var _ invoices.Contacts = invoicesContacts{}
+
+func mapInvoiceContactErr(err error) error {
+	if errors.Is(err, contacts.ErrNotFound) {
+		return invoices.ErrContactNotFound
+	}
+	return err
+}
+
+func (c invoicesContacts) Visible(ctx context.Context, p principal.Principal, contactID int64) error {
+	_, err := c.svc.Visible(ctx, p, contactID)
+	return mapInvoiceContactErr(err)
+}
+
+func (c invoicesContacts) Customer(ctx context.Context, orgID, contactID int64) (invoices.Customer, error) {
+	name, email, mobile, err := c.svc.Customer(ctx, orgID, contactID)
+	return invoices.Customer{Name: name, Email: email, Phone: mobile}, mapInvoiceContactErr(err)
+}
+
+func (c invoicesContacts) Record(ctx context.Context, orgID, contactID int64, kind, summary string, meta map[string]any, actor *int64) error {
+	return mapInvoiceContactErr(c.svc.AddSystemActivity(ctx, orgID, contactID, contacts.SystemActivity{
+		Kind: kind, Summary: summary, Metadata: meta, ActorUserID: actor,
+	}))
+}
+
+// invoicesDeals gives the invoices module the deals a caller may see.
+type invoicesDeals struct {
+	svc *deals.Service
+}
+
+func (d *invoicesDeals) Visible(ctx context.Context, p principal.Principal, dealID int64) (invoices.Deal, error) {
+	deal, err := d.svc.Visible(ctx, p, dealID)
+	if errors.Is(err, deals.ErrNotFound) {
+		return invoices.Deal{}, invoices.ErrDealNotFound
+	}
+	if err != nil {
+		return invoices.Deal{}, err
+	}
+	return invoices.Deal{
+		ID: deal.ID, Title: deal.Title, ContactID: deal.ContactID, OwnerID: deal.OwnerID,
+		AmountPaise: deal.AmountPaise, BillingType: deal.BillingType, BillingPeriod: deal.BillingPeriod,
+	}, nil
 }

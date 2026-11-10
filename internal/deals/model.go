@@ -126,16 +126,18 @@ type HistoryEntry struct {
 
 // Outcome is a deal that was just won or lost.
 type Outcome struct {
-	OrgID       int64
-	DealID      int64
-	Title       string
-	ContactID   *int64
-	OwnerID     *int64
-	ValuePaise  int64
-	BillingType string
-	LostReason  string
-	ClosedAt    time.Time
-	ActorID     int64
+	OrgID         int64
+	DealID        int64
+	Title         string
+	ContactID     *int64
+	OwnerID       *int64
+	ValuePaise    int64
+	BillingType   string
+	AmountPaise   int64
+	BillingPeriod *string
+	LostReason    string
+	ClosedAt      time.Time
+	ActorID       int64
 }
 
 // Contacts is what this module needs from the contacts module (wired in

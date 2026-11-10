@@ -21,6 +21,11 @@ const (
 	TriggerManual   = "manual"
 	TriggerNewLead  = "new_lead"
 	TriggerDealLost = "deal_lost"
+	// TriggerDealWon sequences onboard new customers (welcome messages).
+	// They are transactional: not stopped by the win itself, and their
+	// emails go out without an unsubscribe footer even to contacts who
+	// opted out of marketing (WhatsApp steps still respect the opt-out).
+	TriggerDealWon = "deal_won"
 )
 
 const (
@@ -149,8 +154,8 @@ func validateSequence(s *Sequence) error {
 		return fieldErr("name", "required", "Name is required.")
 	case utf8.RuneCountInString(s.Name) > 100:
 		return fieldErr("name", "invalid", "Name must be at most 100 characters.")
-	case !slices.Contains([]string{TriggerManual, TriggerNewLead, TriggerDealLost}, s.Trigger):
-		return fieldErr("trigger", "invalid", "Trigger must be manual, new_lead or deal_lost.")
+	case !slices.Contains([]string{TriggerManual, TriggerNewLead, TriggerDealLost, TriggerDealWon}, s.Trigger):
+		return fieldErr("trigger", "invalid", "Trigger must be manual, new_lead, deal_lost or deal_won.")
 	case len(s.Steps) == 0:
 		return fieldErr("steps", "required", "A sequence needs at least one step.")
 	case len(s.Steps) > maxSteps:

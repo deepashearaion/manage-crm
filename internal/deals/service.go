@@ -390,7 +390,8 @@ func (s *Service) Move(ctx context.Context, p principal.Principal, id, stageID i
 	if s.events != nil && st.Kind != d.Status && st.Kind != KindOpen {
 		o := Outcome{
 			OrgID: p.OrgID, DealID: id, Title: moved.Title, ContactID: moved.ContactID, OwnerID: moved.OwnerID,
-			ValuePaise: moved.ValuePaise, BillingType: moved.BillingType, LostReason: lostReason, ActorID: p.UserID,
+			ValuePaise: moved.ValuePaise, BillingType: moved.BillingType, AmountPaise: moved.AmountPaise,
+			BillingPeriod: moved.BillingPeriod, LostReason: lostReason, ActorID: p.UserID,
 		}
 		if moved.ClosedAt != nil {
 			o.ClosedAt = *moved.ClosedAt
@@ -482,4 +483,9 @@ func apply[T any](dst *T, v *T) {
 	if v != nil {
 		*dst = *v
 	}
+}
+
+// Visible returns a deal p may see (for other modules, e.g. invoicing).
+func (s *Service) Visible(ctx context.Context, p principal.Principal, id int64) (Deal, error) {
+	return s.repo.Get(ctx, scope(p), id)
 }

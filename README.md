@@ -51,7 +51,8 @@ internal/<module>   one package per business module:
   deals      pipeline: guided stages, deals (paise), won/lost, rule-based forecast
   tasks      to-dos for users (manual, and workflow follow-ups)
   notifications  in-app inbox and email alerts
-  nurture    automated email/WhatsApp sequences, opt-out
+  nurture    automated email/WhatsApp sequences (incl. onboarding), opt-out
+  invoices   GST tax invoices: drafts, gapless numbering, PDF, email
 internal/platform/scheduler  background jobs run by cmd/api
 internal/platform/whatsapp   WhatsApp Cloud API client
   reports    dashboards (read-only queries across modules' tables)
@@ -269,3 +270,55 @@ Example sequence:
   {"channel": "email", "delay_minutes": 4320, "subject": "Still planning?", "body": "…"}
 ]}
 ```
+
+## Onboarding and GST invoices (phase 7e)
+
+**Winning a deal** (the diagram's "Auto onboarding"):
+
+1. The contact leaves nurture and enters the org's active `deal_won`
+   sequence, if there is one (e.g. a welcome email, then a WhatsApp
+   template). Onboarding messages are transactional: winning, turning hot
+   and opting out of marketing don't stop them, and their emails have no
+   unsubscribe footer. WhatsApp steps still skip opted-out contacts.
+2. A **draft invoice** is created from the deal: one line with the deal
+   title and amount, the profile's default SAC and GST rate, and the
+   contact as the customer. The deal's owner gets a high-priority "Review
+   and issue invoice" task due the next day. A deal has at most one live
+   (not cancelled) invoice.
+
+**Billing profile** (`GET`/`PUT /api/v1/billing-profile`, managers and
+above) holds the seller's legal name, GSTIN (checksum-validated), state
+code, address, bank details and terms, plus the invoice prefix, default
+SAC, default GST rate, whether prices include GST, and the payment terms.
+
+**GST.** Rates are basis points (`1800` = 18%) and money is paise. Each line
+has its own SAC and rate. If the place of supply (a state code; it defaults
+from the customer's GSTIN) equals the seller's state, tax is split into CGST
+and SGST (SGST takes an odd paisa); otherwise it is IGST. With inclusive
+prices the taxable value is backed out of the price. The total is rounded
+to the rupee, with a round-off line.
+
+**Issuing** (`POST /api/v1/invoices/{id}/issue`) needs a complete seller
+profile, a customer name, a place of supply and a SAC on every line;
+otherwise it returns 422 `invoice_incomplete` listing what's missing. It
+assigns the next **gapless number for the Indian financial year (April to
+March)**, e.g. `INV/26-27/0001` (16 characters at most). It also copies the
+seller details into the invoice, sets the due date from the payment terms,
+and renders and stores the **PDF**. Issued invoices never change: cancel
+one (managers and above, with a reason; its number is not reused) and
+issue a new one. The PDF (A4) includes the seller and customer GSTINs,
+place of supply, reverse-charge statement, SAC/HSN, per-line tax,
+CGST/SGST/IGST totals, the amount in words (Indian numbering) and a
+signatory block. Fonts are Noto Sans (SIL OFL, `internal/invoices/fonts`).
+Scripts it lacks, such as Devanagari, print as blanks. E-invoicing
+(IRN/QR) is not implemented; its columns are reserved.
+
+| Endpoint | Who | Purpose |
+|---|---|---|
+| `GET /api/v1/invoices?status=&contact_id=&deal_id=&limit=&offset=` | all (reps: own) | List (without lines) |
+| `POST /api/v1/invoices` | writers | Create a draft (`deal_id` fills the customer and line) |
+| `GET/PATCH/DELETE /api/v1/invoices/{id}` | owner or manager+ | Read; edit or delete drafts (`lines` replaces all lines) |
+| `POST /api/v1/invoices/{id}/issue` | owner or manager+ | Issue |
+| `GET /api/v1/invoices/{id}/pdf` | all | The stored PDF, or a DRAFT preview |
+| `POST /api/v1/invoices/{id}/send` | owner or manager+ | Email the PDF to `bill_to_email` |
+| `POST /api/v1/invoices/{id}/cancel` | manager+ | Cancel an issued invoice (`reason`) |
