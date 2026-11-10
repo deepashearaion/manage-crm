@@ -19,21 +19,24 @@ func TestSalesDashboard(t *testing.T) {
 
 	createContact(t, s, token, map[string]any{"first_name": "Today"})
 	// The test user registered the first org (id 1), which got the default stages.
-	s.exec(`INSERT INTO deals (org_id, title, amount, stage_id, monthly_recurring_revenue, annual_recurring_revenue)
-		SELECT 1, v.title, v.amount, ds.id, v.mrr, v.arr
+	s.exec(`INSERT INTO deals (org_id, title, amount_paise, billing_type, billing_period, stage_id, status, closed_at)
+		SELECT 1, v.title, v.paise, v.btype, v.period, ds.id, ds.kind, CASE WHEN ds.kind <> 'open' THEN now() END
 		FROM (VALUES
-			('open-1', 100.50, 'Proposal', 10, 120),
-			('open-2', 200, 'Qualification', 0, 0),
-			('won', 1000, 'Closed Won', 50, 600),
-			('lost', 300, 'Closed Lost', 5, 60)
-		) AS v(title, amount, stage, mrr, arr)
+			('open-1', 10050, 'one_time', NULL, 'Proposal'),
+			('open-2', 20000, 'one_time', NULL, 'Qualification'),
+			('won', 100000, 'one_time', NULL, 'Closed Won'),
+			('won-subscription', 5000, 'recurring', 'monthly', 'Closed Won'), -- ₹50 a month = ₹600 a year
+			('lost', 30000, 'one_time', NULL, 'Closed Lost'),
+			('lost-subscription', 9900, 'recurring', 'yearly', 'Closed Lost')
+		) AS v(title, paise, btype, period, stage)
 		JOIN deal_stages ds ON ds.name = v.stage AND ds.org_id = 1`)
 
 	got := wantJSON(t, s.do("GET", "/api/dashboard/sales", nil, token), http.StatusOK)
-	// Current behavior: ARR/MRR sum every deal, including open and lost ones.
+	// Deal values are one-time amounts or first-year values; ARR counts only
+	// won recurring deals, and MRR is ARR / 12.
 	want := map[string]float64{
-		"total_open_deals": 2, "total_open_deal_value": 300.5, "total_won": 1000, "total_loss": 300,
-		"total_new_customers": 1, "total_arr": 780, "total_mrr": 65,
+		"total_open_deals": 2, "total_open_deal_value": 300.5, "total_won": 1600, "total_loss": 399,
+		"total_new_customers": 1, "total_arr": 600, "total_mrr": 50,
 	}
 	for k, v := range want {
 		if got[k] != v {

@@ -221,3 +221,16 @@ var (
 	ErrInvalidDirection   = errors.New("direction must be inbound or outbound")
 	ErrInvalidTemperature = errors.New("temperature must be cold, warm or hot")
 )
+
+// Deal events on the timeline, recorded by the deals module.
+const (
+	KindDealCreated      = "deal_created"
+	KindDealStageChanged = "deal_stage_changed"
+	KindDealWon          = "deal_won"
+	KindDealLost         = "deal_lost"
+)
+
+// systemKinds are the activity kinds other modules may record.
+var systemKinds = []string{
+	KindTaskCreated, KindTaskCompleted, KindDealCreated, KindDealStageChanged, KindDealWon, KindDealLost,
+}

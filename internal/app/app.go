@@ -67,12 +67,16 @@ func NewHandler(d Deps) http.Handler {
 		tasksNotifier{notifications: notificationService}, d.Logger)
 	tasks.Routes(router, tasks.NewHandler(taskService, d.Logger), requireUserV1)
 
-	leadService := leads.NewService(leads.NewRepository(d.DB), leadsContacts{svc: contactService},
-		workflowEvents{tasks: taskService, notifications: notificationService, users: authService}, d.Logger)
+	events := workflowEvents{tasks: taskService, notifications: notificationService, users: authService}
+
+	leadService := leads.NewService(leads.NewRepository(d.DB), leadsContacts{svc: contactService}, events, d.Logger)
 	leads.Routes(router, leads.NewHandler(leadService, d.Logger, leads.WhatsAppSettings{
 		AppSecret:   cfg.WhatsApp.AppSecret,
 		VerifyToken: cfg.WhatsApp.VerifyToken,
 	}), requireUserV1)
+
+	dealService := deals.NewService(deals.NewRepository(d.DB), dealsContacts{svc: contactService}, events, d.Logger)
+	deals.Routes(router, deals.NewHandler(dealService, d.Logger), requireUserV1)
 
 	reports.Routes(router,
 		reports.NewHandler(reports.NewService(reports.NewRepository(d.DB)), d.Logger),

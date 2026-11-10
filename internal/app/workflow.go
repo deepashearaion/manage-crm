@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/deepashearaion/manage-crm/internal/auth"
 	"github.com/deepashearaion/manage-crm/internal/contacts"
+	"github.com/deepashearaion/manage-crm/internal/deals"
 	"github.com/deepashearaion/manage-crm/internal/leads"
 	"github.com/deepashearaion/manage-crm/internal/notifications"
 	"github.com/deepashearaion/manage-crm/internal/platform/principal"
@@ -157,4 +159,67 @@ type userDirectory struct {
 func (d userDirectory) Email(ctx context.Context, orgID, userID int64) (string, error) {
 	u, err := d.users.OrgUser(ctx, orgID, userID)
 	return u.Email, err
+}
+
+// recontactAfter is how long after a lost deal its owner re-contacts the
+// customer (the diagram's "Back to nurture: re-contact after 30 days").
+const recontactAfter = 30 * 24 * time.Hour
+
+var _ deals.Events = workflowEvents{}
+
+// DealWon: onboarding (welcome message, invoice) arrives in phase 7e; the
+// contact is already a customer and the win is on their timeline.
+func (w workflowEvents) DealWon(context.Context, deals.Outcome) error { return nil }
+
+// DealLost schedules a re-contact task for the deal's owner. Phase 7d adds
+// re-enrolment in a nurture sequence.
+func (w workflowEvents) DealLost(ctx context.Context, o deals.Outcome) error {
+	if o.ContactID == nil || o.OwnerID == nil {
+		return nil
+	}
+	due := o.ClosedAt.Add(recontactAfter)
+	_, _, err := w.tasks.CreateWorkflow(ctx, o.OrgID, tasks.SystemTask{
+		ContactID:   *o.ContactID,
+		AssigneeID:  *o.OwnerID,
+		Title:       "Re-contact: " + o.Title,
+		Description: fmt.Sprintf("Deal %q was lost %s. Reason: %s\nCheck in to see whether their needs have changed.", o.Title, o.ClosedAt.In(ist).Format("2 Jan 2006"), o.LostReason),
+		Type:        "follow_up",
+		Priority:    "normal",
+		Origin:      tasks.OriginDealLost,
+		DueAt:       &due,
+	})
+	return err
+}
+
+var ist = time.FixedZone("IST", 5*3600+1800)
+
+// dealsContacts gives the deals module contact visibility, lifecycle
+// changes and timeline entries (deals.Contacts).
+type dealsContacts struct {
+	svc *contacts.Service
+}
+
+var _ deals.Contacts = dealsContacts{}
+
+func mapDealContactErr(err error) error {
+	if errors.Is(err, contacts.ErrNotFound) {
+		return deals.ErrContactNotFound
+	}
+	return err
+}
+
+func (c dealsContacts) Visible(ctx context.Context, p principal.Principal, contactID int64) error {
+	_, err := c.svc.Visible(ctx, p, contactID)
+	return mapDealContactErr(err)
+}
+
+func (c dealsContacts) SetLifecycle(ctx context.Context, orgID, contactID int64, to string, from []string, actor int64) error {
+	_, err := c.svc.SetStageFrom(ctx, orgID, contactID, to, from, &actor)
+	return mapDealContactErr(err)
+}
+
+func (c dealsContacts) Record(ctx context.Context, orgID, contactID int64, kind, summary string, meta map[string]any, actor int64) error {
+	return mapDealContactErr(c.svc.AddSystemActivity(ctx, orgID, contactID, contacts.SystemActivity{
+		Kind: kind, Summary: summary, Metadata: meta, ActorUserID: &actor,
+	}))
 }

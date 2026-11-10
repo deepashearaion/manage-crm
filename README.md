@@ -48,6 +48,7 @@ internal/<module>   one package per business module:
   auth       users, login, sessions (refresh tokens), password reset
   contacts   contacts, lifecycle stage, lead scores, activity timeline
   leads      lead intake (forms, WhatsApp, manual), dedupe, scoring, routing, lead summaries
+  deals      pipeline: guided stages, deals (paise), won/lost, rule-based forecast
   tasks      to-dos for users (manual, and workflow follow-ups)
   notifications  in-app inbox and email alerts
   reports    dashboards (read-only queries across modules' tables)
@@ -154,3 +155,50 @@ contact timeline.
 | `GET/PATCH/DELETE /api/v1/tasks/{id}` | assignee or manager+ | Read, edit (`status`: open, done, cancelled), delete |
 | `GET /api/v1/notifications?unread=true&limit=&before_id=` | self | Inbox plus `unread_count` |
 | `POST /api/v1/notifications/{id}/read`, `POST /api/v1/notifications/read-all` | self | Mark read |
+
+## Deal pipeline (phase 7c)
+
+Money is integer **paise** (INR). A deal's `amount_paise` is its value per
+billing period: the whole value for `one_time` deals, or the monthly,
+quarterly or yearly fee for `recurring` ones. `value_paise` (SQL
+`crm_deal_value_paise`) is the one-time amount or the first-year value, and
+is used by the pipeline, the forecast and the dashboard. ARR counts only
+won recurring deals; MRR is ARR / 12.
+
+**Guided stages.** Each stage has a `kind` (`open`, `won`, `lost`), a win
+`probability`, `guidance` (what to do in it) and `required_fields`
+(`amount`, `expected_close_date`, `contact`) that must be filled before a
+deal can enter it; otherwise the move fails with 422 `stage_requirements`,
+listing what's missing. Deals change stage only via
+`POST /api/v1/deals/{id}/stage`, which records the history. Losing needs a
+`lost_reason`.
+
+**Outcomes.** A deal in an open stage makes its contact an `opportunity`.
+Winning makes the contact a `customer`. Losing makes them `lost`, unless
+they have another open or won deal, and gives the owner a "Re-contact"
+task due 30 days later. Reopening a closed deal clears its outcome. All of
+these go on the contact timeline.
+
+**Win probability** (rule-based) is the stage probability, ×0.5 when the
+deal has not changed stage for 30 days, ×0.5 when its expected close date
+has passed, and ×0.8 when it has no close date. Each deal returns
+`win_probability` and `probability_notes`.
+
+**Forecast** (`GET /api/v1/deals/forecast?from=YYYY-MM&months=3&owner_id=`)
+covers IST months. For each month it gives the deals won, and for the open
+deals expected to close that month (overdue ones count in the current
+month): `best_case_paise` (all close), `weighted_paise` (× stage
+probability), `forecast_paise` (× adjusted win probability) and
+`commit_paise` (adjusted probability ≥ 70%). It also returns `overdue` and
+`undated` totals.
+
+| Endpoint | Who | Purpose |
+|---|---|---|
+| `GET /api/v1/deal-stages` | all | Stages in order, with open deal count and value (reps: their own) |
+| `POST /api/v1/deal-stages`, `PATCH/DELETE …/{id}` | manager+ | Manage stages (kind fixed; deletion blocked while in use or if it is the last of its kind) |
+| `GET /api/v1/deals?status=&stage_id=&owner_id=&contact_id=&limit=&offset=` | all (reps: own) | Deals by stage order, then close date |
+| `POST /api/v1/deals` | writers | Create in an open stage (first one by default) |
+| `GET/PATCH/DELETE /api/v1/deals/{id}` | owner or manager+ | Read, edit fields, delete |
+| `POST /api/v1/deals/{id}/stage` | owner or manager+ | Move (`stage_id`, `lost_reason`) |
+| `GET /api/v1/deals/{id}/history` | all | Stage changes |
+| `GET /api/v1/deals/forecast` | all (reps: own) | Forecast |

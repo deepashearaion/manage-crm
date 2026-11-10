@@ -2,6 +2,7 @@ package contacts
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"time"
 
@@ -40,9 +41,9 @@ func (s *Service) AssignOwner(ctx context.Context, orgID, contactID, userID int6
 }
 
 // AddSystemActivity puts another module's event on a contact's timeline.
-// Only task events are accepted; other kinds belong to this module.
+// Only task and deal events are accepted; other kinds belong to this module.
 func (s *Service) AddSystemActivity(ctx context.Context, orgID, contactID int64, a SystemActivity) error {
-	if a.Kind != KindTaskCreated && a.Kind != KindTaskCompleted {
+	if !slices.Contains(systemKinds, a.Kind) {
 		return ErrInvalidKind
 	}
 	return s.repo.AddSystemActivity(ctx, newActivity{
@@ -151,4 +152,13 @@ func (s *Service) SetStage(ctx context.Context, p principal.Principal, id int64,
 		return View{}, ErrForbidden
 	}
 	return s.repo.SetStage(ctx, scope(p), id, stage, p.UserID)
+}
+
+// SetStageFrom moves a contact's lifecycle stage for another module (a deal
+// won or lost), only from the given stages (any when empty).
+func (s *Service) SetStageFrom(ctx context.Context, orgID, contactID int64, to string, from []string, actor *int64) (bool, error) {
+	if !ValidStage(to) {
+		return false, ErrInvalidStage
+	}
+	return s.repo.SetStageFrom(ctx, orgID, contactID, to, from, actor)
 }

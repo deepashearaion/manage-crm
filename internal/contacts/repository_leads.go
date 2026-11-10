@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -506,4 +507,37 @@ func (r *Repository) SetStage(ctx context.Context, s Scope, id int64, stage stri
 		return View{}, err
 	}
 	return r.GetView(ctx, s, id)
+}
+
+// SetStageFrom moves a contact in orgID to stage `to` if its current stage
+// is one of `from` (any when empty), logging the change. It reports whether
+// the stage changed.
+func (r *Repository) SetStageFrom(ctx context.Context, orgID, id int64, to string, from []string, actor *int64) (bool, error) {
+	changed := false
+	err := pgx.BeginFunc(ctx, r.db, func(tx pgx.Tx) error {
+		var cur string
+		err := tx.QueryRow(ctx,
+			`SELECT lifecycle_stage FROM contacts WHERE org_id = $1 AND id = $2 FOR UPDATE`, orgID, id,
+		).Scan(&cur)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil || cur == to || (len(from) > 0 && !slices.Contains(from, cur)) {
+			return err
+		}
+		if _, err := tx.Exec(ctx,
+			`UPDATE contacts SET lifecycle_stage = $3, updated_at = now() WHERE org_id = $1 AND id = $2`, orgID, id, to,
+		); err != nil {
+			return err
+		}
+		changed = true
+		_, _, err = insertActivity(ctx, tx, newActivity{
+			OrgID: orgID, ContactID: id, Kind: KindLifecycleChanged, Channel: ChannelSystem,
+			Summary:     fmt.Sprintf("Stage %s → %s", cur, to),
+			Metadata:    map[string]any{"from": cur, "to": to},
+			ActorUserID: actor,
+		})
+		return err
+	})
+	return changed, err
 }
