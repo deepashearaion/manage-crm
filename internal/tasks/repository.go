@@ -3,6 +3,8 @@ package tasks
 import (
 	"context"
 	"errors"
+	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -120,6 +122,8 @@ func (r *Repository) Save(ctx context.Context, s Scope, t Task) (Task, error) {
 		`UPDATE tasks SET
 			assignee_id = $4, title = $5, description = $6, type = $7, priority = $8, status = $9, due_at = $10,
 			completed_at = CASE WHEN $9 = 'done' THEN COALESCE(completed_at, now()) END,
+			-- a new due date or a reopened task earns a new overdue reminder
+			reminded_at = CASE WHEN due_at IS DISTINCT FROM $10 OR (status <> 'open' AND $9 = 'open') THEN NULL ELSE reminded_at END,
 			updated_at = now()
 		WHERE `+scopeFilter+` AND id = $3
 		RETURNING `+columns,
@@ -133,4 +137,44 @@ func (r *Repository) Delete(ctx context.Context, s Scope, id int64) error {
 		return ErrNotFound
 	}
 	return err
+}
+
+// ClaimOverdue marks up to limit open tasks that became overdue before now
+// as reminded and returns them with their org. Claiming and marking in one
+// statement means each overdue task is reminded once, even with several
+// workers.
+func (r *Repository) ClaimOverdue(ctx context.Context, now time.Time, limit int) ([]Task, []int64, error) {
+	rows, err := r.db.Query(ctx,
+		`WITH due AS (
+			SELECT id FROM tasks
+			WHERE status = 'open' AND reminded_at IS NULL AND due_at < $1
+			ORDER BY due_at LIMIT $2 FOR UPDATE SKIP LOCKED
+		)
+		UPDATE tasks t SET reminded_at = $1 FROM due WHERE t.id = due.id
+		RETURNING t.org_id, `+prefixed("t.", columns), now, limit)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+	var list []Task
+	var orgs []int64
+	for rows.Next() {
+		var org int64
+		var t Task
+		if err := rows.Scan(&org, &t.ID, &t.ContactID, &t.AssigneeID, &t.CreatedByID, &t.Title, &t.Description,
+			&t.Type, &t.Priority, &t.Status, &t.Origin, &t.DueAt, &t.CompletedAt, &t.CreatedAt, &t.UpdatedAt); err != nil {
+			return nil, nil, err
+		}
+		list, orgs = append(list, t), append(orgs, org)
+	}
+	return list, orgs, rows.Err()
+}
+
+// prefixed qualifies each comma-separated column with p.
+func prefixed(p, cols string) string {
+	parts := strings.Split(cols, ",")
+	for i, c := range parts {
+		parts[i] = p + strings.TrimSpace(c)
+	}
+	return strings.Join(parts, ", ")
 }

@@ -113,6 +113,10 @@ type LeadAssigned struct {
 type Events interface {
 	LeadTurnedHot(ctx context.Context, e HotLead) error
 	LeadAssigned(ctx context.Context, e LeadAssigned) error
+	// LeadReplied: an existing contact sent a message (nurture stops).
+	LeadReplied(ctx context.Context, orgID, contactID int64) error
+	// LeadNotHot: a new lead that is not hot (nurture starts).
+	LeadNotHot(ctx context.Context, orgID, contactID int64) error
 }
 
 // Score is a computed lead score.
@@ -136,6 +140,8 @@ type Contacts interface {
 	AssignOwner(ctx context.Context, orgID, contactID, userID int64, reason string) (bool, error)
 	// Visible returns the owner of a contact p may see, or ErrContactNotFound.
 	Visible(ctx context.Context, p principal.Principal, contactID int64) (*int64, error)
+	// OptOut records that the contact opted out of marketing.
+	OptOut(ctx context.Context, orgID, contactID int64, via string) error
 }
 
 // Result reports the outcome of a capture.
@@ -256,4 +262,5 @@ var (
 	ErrNameTaken        = errors.New("name already used")
 	ErrPhoneNumberTaken = errors.New("phone number id already registered")
 	ErrSourceInactive   = errors.New("lead source not found or inactive")
+	ErrNoWhatsAppNumber = errors.New("no WhatsApp number registered")
 )

@@ -26,6 +26,7 @@ const (
 	KindHotLead      = "hot_lead"
 	KindLeadAssigned = "lead_assigned"
 	KindTaskAssigned = "task_assigned"
+	KindTaskOverdue  = "task_overdue"
 )
 
 type Notification struct {

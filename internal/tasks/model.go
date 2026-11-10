@@ -102,9 +102,10 @@ type Contacts interface {
 	TaskCompleted(ctx context.Context, orgID int64, t Task, by int64) error
 }
 
-// Notifier tells a user a task was assigned to them by someone else.
+// Notifier tells users about their tasks: assigned by someone else, or overdue.
 type Notifier interface {
 	TaskAssigned(ctx context.Context, orgID int64, t Task, by int64) error
+	TaskOverdue(ctx context.Context, orgID int64, t Task) error
 }
 
 // FieldError is a validation failure on one request field.

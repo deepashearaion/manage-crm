@@ -16,6 +16,7 @@ import (
 	"github.com/deepashearaion/manage-crm/internal/platform/httpx"
 	"github.com/deepashearaion/manage-crm/internal/platform/logging"
 	"github.com/deepashearaion/manage-crm/internal/platform/mail"
+	"github.com/deepashearaion/manage-crm/internal/platform/scheduler"
 )
 
 func main() {
@@ -57,11 +58,25 @@ func run() error {
 	mailer := mail.NewAsync(sender, logger, 30*time.Second)
 	defer mailer.Wait() // let queued emails finish after the server stops
 
-	handler := app.NewHandler(app.Deps{Config: cfg, DB: db, Logger: logger, Mailer: mailer})
+	application := app.New(app.Deps{Config: cfg, DB: db, Logger: logger, Mailer: mailer})
 
-	logger.Info("starting", slog.String("env", cfg.Env), slog.Bool("smtp", cfg.SMTP.Enabled()))
+	// Background jobs (nurture sends, overdue reminders) run until shutdown;
+	// the deferred wait lets a running job finish before the database closes.
+	jobsCtx, stopJobs := context.WithCancel(ctx)
+	jobsDone := make(chan struct{})
+	go func() {
+		scheduler.Run(jobsCtx, logger, application.Jobs)
+		close(jobsDone)
+	}()
+	defer func() {
+		stopJobs()
+		<-jobsDone
+	}()
+
+	logger.Info("starting", slog.String("env", cfg.Env), slog.Bool("smtp", cfg.SMTP.Enabled()),
+		slog.Bool("whatsapp_webhook", cfg.WhatsApp.WebhookEnabled()), slog.Bool("whatsapp_sending", cfg.WhatsApp.SendingEnabled()))
 	if cfg.ReturnResetTokenInResponse {
 		logger.Warn("RETURN_RESET_TOKEN_IN_RESPONSE is on: forgot-password responses include the reset token")
 	}
-	return httpx.Serve(ctx, ":"+cfg.Port, handler, logger, 15*time.Second)
+	return httpx.Serve(ctx, ":"+cfg.Port, application.Handler, logger, 15*time.Second)
 }

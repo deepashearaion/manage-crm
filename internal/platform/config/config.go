@@ -73,6 +73,7 @@ type WhatsApp struct {
 	VerifyToken   string // WHATSAPP_VERIFY_TOKEN
 	AccessToken   string // WHATSAPP_TOKEN
 	PhoneNumberID string // WHATSAPP_PHONE_NUMBER_ID
+	APIVersion    string // WHATSAPP_API_VERSION, Graph API version, default v23.0
 }
 
 // WebhookEnabled reports whether inbound WhatsApp messages are accepted.
@@ -154,6 +155,7 @@ func FromEnv(getenv func(string) string) (*Config, error) {
 			VerifyToken:   getenv("WHATSAPP_VERIFY_TOKEN"),
 			AccessToken:   getenv("WHATSAPP_TOKEN"),
 			PhoneNumberID: get("WHATSAPP_PHONE_NUMBER_ID", ""),
+			APIVersion:    get("WHATSAPP_API_VERSION", "v23.0"),
 		},
 	}
 
@@ -254,3 +256,6 @@ func FromEnv(getenv func(string) string) (*Config, error) {
 	}
 	return c, nil
 }
+
+// SendingEnabled reports whether WhatsApp messages can be sent.
+func (w WhatsApp) SendingEnabled() bool { return w.AccessToken != "" }

@@ -359,7 +359,8 @@ const viewColumns = `
 	s.temperature,
 	s.reasons,
 	s.method,
-	s.scored_at`
+	s.scored_at,
+	c.marketing_opt_out_at`
 
 const viewFrom = ` FROM contacts c LEFT JOIN lead_scores s ON s.contact_id = c.id`
 
@@ -376,7 +377,7 @@ func scanView(row pgx.Row) (View, error) {
 		&v.ID, &v.FirstName, &v.LastName, &v.Email, &v.Mobile, &v.AlternateMobile,
 		&v.CompanyID, &v.LeadStatusID, &v.LeadOwnerID, &v.Destination, &v.Source, &v.Notes,
 		&v.LifecycleStage, &v.CreatedAt, &v.UpdatedAt,
-		&score, &temperature, &reasons, &method, &scoredAt,
+		&score, &temperature, &reasons, &method, &scoredAt, &v.MarketingOptOutAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return View{}, ErrNotFound
@@ -540,4 +541,38 @@ func (r *Repository) SetStageFrom(ctx context.Context, orgID, id int64, to strin
 		return err
 	})
 	return changed, err
+}
+
+// Recipient returns what nurture needs to message a contact in orgID.
+func (r *Repository) Recipient(ctx context.Context, orgID, id int64) (Recipient, error) {
+	var rc Recipient
+	err := r.db.QueryRow(ctx,
+		`SELECT c.first_name, COALESCE(c.last_name, ''), COALESCE(c.email_key, ''), COALESCE(c.phone_key, ''),
+			c.lifecycle_stage, c.marketing_opt_out_at IS NOT NULL, c.lead_owner_id,
+			(SELECT max(a.occurred_at) FROM contact_activities a
+			 WHERE a.contact_id = c.id AND a.kind = 'message' AND a.direction = 'inbound' AND a.channel = 'whatsapp')
+		FROM contacts c WHERE c.org_id = $1 AND c.id = $2`, orgID, id,
+	).Scan(&rc.FirstName, &rc.LastName, &rc.Email, &rc.PhoneKey, &rc.LifecycleStage, &rc.OptedOut, &rc.OwnerID,
+		&rc.LastWhatsAppInboundAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Recipient{}, ErrNotFound
+	}
+	return rc, err
+}
+
+// OptOut records that a contact opted out of marketing, once.
+func (r *Repository) OptOut(ctx context.Context, orgID, id int64, via string) error {
+	return pgx.BeginFunc(ctx, r.db, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx,
+			`UPDATE contacts SET marketing_opt_out_at = now(), updated_at = now()
+			WHERE org_id = $1 AND id = $2 AND marketing_opt_out_at IS NULL`, orgID, id)
+		if err != nil || tag.RowsAffected() == 0 {
+			return err
+		}
+		_, _, err = insertActivity(ctx, tx, newActivity{
+			OrgID: orgID, ContactID: id, Kind: KindOptedOut, Channel: ChannelSystem,
+			Summary: "Opted out of marketing via " + via, Metadata: map[string]any{"via": via},
+		})
+		return err
+	})
 }

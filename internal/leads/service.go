@@ -115,6 +115,16 @@ func (s *Service) Capture(ctx context.Context, orgID int64, l Lead) (Result, err
 			})
 		})
 	}
+
+	// Nurture: a known contact's message stops their sequences (the
+	// diagram's "re-score on reply" already happened above); a new lead
+	// that is not hot starts one.
+	if !c.Created && l.Message != "" {
+		s.raise(ctx, "lead replied", func() error { return s.events.LeadReplied(ctx, orgID, c.ContactID) })
+	}
+	if c.Created && sc.score.Temperature != Hot {
+		s.raise(ctx, "lead not hot", func() error { return s.events.LeadNotHot(ctx, orgID, c.ContactID) })
+	}
 	return res, nil
 }
 

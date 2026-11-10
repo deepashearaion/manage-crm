@@ -162,3 +162,24 @@ func (s *Service) SetStageFrom(ctx context.Context, orgID, contactID int64, to s
 	}
 	return s.repo.SetStageFrom(ctx, orgID, contactID, to, from, actor)
 }
+
+// Recipient returns what nurture needs to message a contact in orgID.
+func (s *Service) Recipient(ctx context.Context, orgID, contactID int64) (Recipient, error) {
+	return s.repo.Recipient(ctx, orgID, contactID)
+}
+
+// OptOut records a marketing opt-out (via: "email link", "whatsapp").
+func (s *Service) OptOut(ctx context.Context, orgID, contactID int64, via string) error {
+	return s.repo.OptOut(ctx, orgID, contactID, via)
+}
+
+// RecordOutbound puts a message another module sent on the timeline.
+func (s *Service) RecordOutbound(ctx context.Context, orgID, contactID int64, m OutboundMessage) error {
+	if m.Channel != ChannelEmail && m.Channel != ChannelWhatsApp {
+		return ErrInvalidKind
+	}
+	return s.repo.AddSystemActivity(ctx, newActivity{
+		OrgID: orgID, ContactID: contactID, Kind: KindMessage, Channel: m.Channel, Direction: "outbound",
+		Summary: m.Summary, Body: m.Body, ExternalID: m.ExternalID, Metadata: m.Metadata,
+	})
+}

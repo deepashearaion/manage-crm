@@ -8,11 +8,13 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -20,15 +22,19 @@ import (
 	"github.com/deepashearaion/manage-crm/internal/platform/config"
 	"github.com/deepashearaion/manage-crm/internal/platform/logging"
 	"github.com/deepashearaion/manage-crm/internal/platform/mail"
+	"github.com/deepashearaion/manage-crm/internal/platform/scheduler"
 	"github.com/deepashearaion/manage-crm/internal/testutil"
 )
 
 type server struct {
-	t    *testing.T
-	h    http.Handler
-	db   *pgxpool.Pool
-	cfg  *config.Config
-	mail *captureMailer
+	t     *testing.T
+	h     http.Handler
+	db    *pgxpool.Pool
+	cfg   *config.Config
+	mail  *captureMailer
+	wa    *captureWhatsApp
+	clock *testClock
+	jobs  []scheduler.Job
 }
 
 // testEnv is the configuration the API tests run with; tests may override
@@ -57,13 +63,17 @@ func newServerWith(t *testing.T, env map[string]string) *server {
 	}
 	db := testutil.FreshDB(t)
 	mailer := &captureMailer{}
-	h := app.NewHandler(app.Deps{
-		Config: cfg,
-		DB:     db,
-		Logger: logging.New(testWriter{t}, "text", "warn"),
-		Mailer: mailer,
+	wa := &captureWhatsApp{}
+	clock := &testClock{}
+	a := app.New(app.Deps{
+		Config:   cfg,
+		DB:       db,
+		Logger:   logging.New(testWriter{t}, "text", "warn"),
+		Mailer:   mailer,
+		WhatsApp: wa,
+		Now:      clock.Now,
 	})
-	return &server{t: t, h: h, db: db, cfg: cfg, mail: mailer}
+	return &server{t: t, h: a.Handler, db: db, cfg: cfg, mail: mailer, wa: wa, clock: clock, jobs: a.Jobs}
 }
 
 // testWriter sends log output to the test log, shown only for failing tests.
@@ -217,4 +227,76 @@ func decodeJWTClaims(t *testing.T, token string) map[string]any {
 		t.Fatal(err)
 	}
 	return claims
+}
+
+// testClock is the clock scheduled work sees: real time unless set.
+type testClock struct {
+	mu sync.Mutex
+	at time.Time
+}
+
+func (c *testClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.at.IsZero() {
+		return time.Now()
+	}
+	return c.at
+}
+
+func (c *testClock) Set(t time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.at = t
+}
+
+// runJob runs a scheduler job by name, as cmd/api would.
+func (s *server) runJob(name string) {
+	s.t.Helper()
+	for _, j := range s.jobs {
+		if j.Name == name {
+			if err := j.Run(context.Background()); err != nil {
+				s.t.Fatalf("job %s: %v", name, err)
+			}
+			return
+		}
+	}
+	s.t.Fatalf("no job %q", name)
+}
+
+// waSent is a WhatsApp message the app sent.
+type waSent struct {
+	From, To, Text, Template string
+	Params                   []string
+}
+
+// captureWhatsApp records WhatsApp messages instead of sending them.
+type captureWhatsApp struct {
+	mu   sync.Mutex
+	sent []waSent
+	fail error
+}
+
+func (w *captureWhatsApp) SendText(_ context.Context, from, to, body string) (string, error) {
+	return w.record(waSent{From: from, To: to, Text: body})
+}
+
+func (w *captureWhatsApp) SendTemplate(_ context.Context, from, to, name, _ string, params []string) (string, error) {
+	return w.record(waSent{From: from, To: to, Template: name, Params: params})
+}
+
+func (w *captureWhatsApp) record(m waSent) (string, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.fail != nil {
+		return "", w.fail
+	}
+	w.sent = append(w.sent, m)
+	return fmt.Sprintf("wamid.out%d", len(w.sent)), nil
+}
+
+func (w *captureWhatsApp) messages() []waSent {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return append([]waSent(nil), w.sent...)
 }

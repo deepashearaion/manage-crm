@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/deepashearaion/manage-crm/internal/platform/principal"
@@ -16,10 +17,11 @@ type Service struct {
 	contacts Contacts
 	notifier Notifier
 	logger   *slog.Logger
+	now      func() time.Time
 }
 
 func NewService(repo *Repository, contacts Contacts, notifier Notifier, logger *slog.Logger) *Service {
-	return &Service{repo: repo, contacts: contacts, notifier: notifier, logger: logger}
+	return &Service{repo: repo, contacts: contacts, notifier: notifier, logger: logger, now: time.Now}
 }
 
 // scope is what p may see: their org, and only tasks assigned to them for reps.
@@ -219,3 +221,25 @@ func truncate(s string, n int) string {
 	}
 	return s
 }
+
+// RemindOverdue notifies assignees of tasks that have become overdue, once
+// per due date. It is a scheduler job.
+func (s *Service) RemindOverdue(ctx context.Context) error {
+	for {
+		list, orgs, err := s.repo.ClaimOverdue(ctx, s.now(), 100)
+		if err != nil {
+			return err
+		}
+		for i, t := range list {
+			if err := s.notifier.TaskOverdue(ctx, orgs[i], t); err != nil {
+				s.logger.ErrorContext(ctx, "overdue reminder", slog.Int64("task_id", t.ID), slog.Any("error", err))
+			}
+		}
+		if len(list) < 100 || ctx.Err() != nil {
+			return ctx.Err()
+		}
+	}
+}
+
+// SetClock replaces the clock (tests).
+func (s *Service) SetClock(now func() time.Time) { s.now = now }

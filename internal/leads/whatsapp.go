@@ -217,7 +217,7 @@ func (s *Service) HandleWhatsAppMessages(ctx context.Context, body []byte) error
 			continue
 		}
 		first, last := splitName(m.Name, m.WaID)
-		_, err = s.Capture(ctx, acct.OrgID, Lead{
+		res, err := s.Capture(ctx, acct.OrgID, Lead{
 			FirstName:  first,
 			LastName:   last,
 			Mobile:     "+" + m.WaID,
@@ -232,9 +232,32 @@ func (s *Service) HandleWhatsAppMessages(ctx context.Context, body []byte) error
 			s.logger.WarnContext(ctx, "whatsapp message not captured", slog.String("reason", fe.Message))
 			continue
 		}
+		if err == nil && !res.AlreadyProcessed && isStopWord(m.Body) {
+			err = s.contacts.OptOut(ctx, acct.OrgID, res.ContactID, "whatsapp")
+		}
 		if err != nil {
 			errs = append(errs, err)
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// stopWords opt a contact out of marketing when sent as a whole message.
+var stopWords = map[string]bool{"STOP": true, "STOP ALL": true, "UNSUBSCRIBE": true, "OPT OUT": true}
+
+func isStopWord(body string) bool {
+	return stopWords[strings.ToUpper(strings.Join(strings.Fields(body), " "))]
+}
+
+// SenderNumber returns the WhatsApp phone_number_id an org sends from: its
+// first registered account.
+func (s *Service) SenderNumber(ctx context.Context, orgID int64) (string, error) {
+	accounts, err := s.repo.WhatsAppAccounts(ctx, orgID)
+	if err != nil {
+		return "", err
+	}
+	if len(accounts) == 0 {
+		return "", ErrNoWhatsAppNumber
+	}
+	return accounts[0].PhoneNumberID, nil
 }

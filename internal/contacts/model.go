@@ -123,22 +123,23 @@ type Score struct {
 // View is a contact as /api/v1 returns it: the legacy fields plus the
 // lifecycle stage and the current score (nil until scored).
 type View struct {
-	ID              int64     `json:"id"`
-	FirstName       string    `json:"first_name"`
-	LastName        string    `json:"last_name"`
-	Email           string    `json:"email"`
-	Mobile          string    `json:"mobile"`
-	AlternateMobile string    `json:"alternate_mobile"`
-	CompanyID       *int64    `json:"company_id"`
-	LeadStatusID    *int64    `json:"lead_status_id"`
-	LeadOwnerID     *int64    `json:"lead_owner_id"`
-	Destination     string    `json:"destination"`
-	Source          string    `json:"source"`
-	Notes           string    `json:"notes"`
-	LifecycleStage  string    `json:"lifecycle_stage"`
-	Score           *Score    `json:"score"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	ID                int64      `json:"id"`
+	FirstName         string     `json:"first_name"`
+	LastName          string     `json:"last_name"`
+	Email             string     `json:"email"`
+	Mobile            string     `json:"mobile"`
+	AlternateMobile   string     `json:"alternate_mobile"`
+	CompanyID         *int64     `json:"company_id"`
+	LeadStatusID      *int64     `json:"lead_status_id"`
+	LeadOwnerID       *int64     `json:"lead_owner_id"`
+	Destination       string     `json:"destination"`
+	Source            string     `json:"source"`
+	Notes             string     `json:"notes"`
+	LifecycleStage    string     `json:"lifecycle_stage"`
+	Score             *Score     `json:"score"`
+	MarketingOptOutAt *time.Time `json:"marketing_opt_out_at"`
+	CreatedAt         time.Time  `json:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at"`
 }
 
 // ListFilter narrows GET /api/v1/contacts. Results are newest first and
@@ -233,4 +234,35 @@ const (
 // systemKinds are the activity kinds other modules may record.
 var systemKinds = []string{
 	KindTaskCreated, KindTaskCompleted, KindDealCreated, KindDealStageChanged, KindDealWon, KindDealLost,
+	KindNurtureEnrolled, KindNurtureStopped,
+}
+
+// Nurture events on the timeline.
+const (
+	KindNurtureEnrolled = "nurture_enrolled"
+	KindNurtureStopped  = "nurture_stopped"
+	KindOptedOut        = "opted_out"
+)
+
+// Recipient is what nurture needs to message a contact. Email and PhoneKey
+// are normalized (lowercase email; phone digits with country code), "" when
+// missing.
+type Recipient struct {
+	FirstName             string
+	LastName              string
+	Email                 string
+	PhoneKey              string
+	LifecycleStage        string
+	OptedOut              bool
+	OwnerID               *int64
+	LastWhatsAppInboundAt *time.Time
+}
+
+// OutboundMessage is a message another module sent to a contact.
+type OutboundMessage struct {
+	Channel    string // email or whatsapp
+	Summary    string
+	Body       string
+	ExternalID string
+	Metadata   map[string]any
 }

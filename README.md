@@ -51,6 +51,9 @@ internal/<module>   one package per business module:
   deals      pipeline: guided stages, deals (paise), won/lost, rule-based forecast
   tasks      to-dos for users (manual, and workflow follow-ups)
   notifications  in-app inbox and email alerts
+  nurture    automated email/WhatsApp sequences, opt-out
+internal/platform/scheduler  background jobs run by cmd/api
+internal/platform/whatsapp   WhatsApp Cloud API client
   reports    dashboards (read-only queries across modules' tables)
 internal/platform/{config,database,httpx,logging,mail,principal,validate}  shared infrastructure
 internal/apitest  black-box tests for the /api routes
@@ -202,3 +205,67 @@ probability), `forecast_paise` (× adjusted win probability) and
 | `POST /api/v1/deals/{id}/stage` | owner or manager+ | Move (`stage_id`, `lost_reason`) |
 | `GET /api/v1/deals/{id}/history` | all | Stage changes |
 | `GET /api/v1/deals/forecast` | all (reps: own) | Forecast |
+
+## Nurture and background jobs (phase 7d)
+
+`cmd/api` runs background jobs next to the HTTP server: **nurture** every
+minute and **overdue task reminders** every 5 minutes. Jobs claim their
+rows with `FOR UPDATE SKIP LOCKED`, so several API instances can run at
+once.
+
+**Sequences** are timed steps over email or WhatsApp. Each step waits
+`delay_minutes` after the previous one, and bodies may use
+`{{first_name}}`, `{{last_name}}` and `{{full_name}}`. The `trigger` says
+what enrolls contacts automatically (an org has one active sequence per
+trigger):
+
+- `new_lead`: a new lead that is not hot (the diagram's "Auto nurture").
+- `deal_lost`: a lost deal (the diagram's "Back to nurture"); give the first
+  step a 43200-minute (30-day) delay. Without an active `deal_lost`
+  sequence, the owner gets a re-contact task due in 30 days instead.
+- `manual`: only `POST /api/v1/nurture-sequences/{id}/enrollments`.
+
+Enrollments stop when the contact **replies** (for sequences with
+`stop_on_reply`; the reply also re-scores the lead), **turns hot** (a rep
+takes over), **wins a deal**, becomes a customer, or **opts out**. Nothing
+is sent during **quiet hours** (21:00–09:00 IST): due steps wait until
+09:00. A failed send is retried after 5, 20, 45 and 80 minutes; after 5
+failures, or a permanent WhatsApp error, the step is skipped and noted in
+`last_error`. Sent messages appear on the contact timeline as outbound
+messages.
+
+**WhatsApp** messages go out from the org's first registered number
+(`/api/v1/whatsapp-accounts`) using `WHATSAPP_TOKEN`. Inside WhatsApp's
+24-hour window (the contact messaged within the last 24 hours) a step sends
+its `body` as free text. Outside it, the step sends its approved
+`whatsapp_template` with `whatsapp_template_params`, or is skipped if it
+has none. Without `WHATSAPP_TOKEN`, messages are logged instead of sent.
+
+**Opt-out.** Every nurture email ends with an unsubscribe link to
+`FRONTEND_URL/unsubscribe?token=…`. The frontend page posts the token to
+`POST /api/v1/unsubscribe`. A WhatsApp message saying just "STOP",
+"UNSUBSCRIBE" or "OPT OUT" also opts the contact out. Opted-out contacts
+(`marketing_opt_out_at` on the contact) get no nurture messages.
+
+**Overdue tasks** send their assignee a `task_overdue` notification once per
+due date; changing the due date or reopening the task re-arms it.
+
+| Endpoint | Who | Purpose |
+|---|---|---|
+| `GET /api/v1/nurture-sequences`, `GET …/{id}` | all | Sequences with steps and active enrollment count |
+| `POST /api/v1/nurture-sequences`, `PATCH/DELETE …/{id}` | manager+ | Manage (`steps` replaces all steps) |
+| `POST /api/v1/nurture-sequences/{id}/enrollments` | writers | Enroll a contact (`contact_id`) |
+| `GET /api/v1/nurture-enrollments?contact_id=&sequence_id=&status=` | all (reps: per contact) | Enrollments |
+| `POST /api/v1/nurture-enrollments/{id}/stop` | writers | Stop one |
+| `POST /api/v1/unsubscribe` | public | Opt out with an email token |
+
+Example sequence:
+
+```json
+{"name": "Welcome", "trigger": "new_lead", "active": true, "steps": [
+  {"channel": "email", "delay_minutes": 0, "subject": "Hello {{first_name}}", "body": "Thanks for your interest…"},
+  {"channel": "whatsapp", "delay_minutes": 1440, "body": "Hi {{first_name}}, any questions?",
+   "whatsapp_template": "lead_followup", "whatsapp_language": "en", "whatsapp_template_params": ["{{first_name}}"]},
+  {"channel": "email", "delay_minutes": 4320, "subject": "Still planning?", "body": "…"}
+]}
+```
