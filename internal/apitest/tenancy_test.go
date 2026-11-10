@@ -138,6 +138,10 @@ func TestRolePermissions(t *testing.T) {
 				http.StatusNotFound, "Contact not found")
 		}
 		wantStatus(t, s.do("PATCH", contactPath(repsContact), map[string]any{"notes": "mine"}, repToken), http.StatusOK)
+		// One first win today each for the rep and the owner.
+		s.exec(`INSERT INTO deals (org_id, title, contact_id, owner_id, stage_id, status, closed_at)
+			SELECT $1, 'won', c.id, c.lead_owner_id, s.id, 'won', now()
+			FROM contacts c JOIN deal_stages s ON s.org_id = $1 AND s.name = 'Closed Won' WHERE c.org_id = $1`, org)
 		dash := wantJSON(t, s.do("GET", "/api/dashboard/sales", nil, repToken), http.StatusOK)
 		if dash["total_new_customers"] != float64(1) {
 			t.Errorf("rep dashboard new customers = %v, want 1 (own only)", dash["total_new_customers"])

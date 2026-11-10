@@ -5,6 +5,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/deepashearaion/manage-crm/internal/platform/money"
 )
 
 // ist is India Standard Time (UTC+5:30): invoice dates and financial years
@@ -174,27 +176,8 @@ func amountInWords(paise int64) string {
 	return s + " Only"
 }
 
-// formatRupees formats paise as ₹1,23,456.78 (Indian digit grouping).
-func formatRupees(paise int64) string {
-	sign := ""
-	if paise < 0 {
-		sign, paise = "-", -paise
-	}
-	whole := fmt.Sprint(paise / 100)
-	if len(whole) > 3 {
-		head, tail := whole[:len(whole)-3], whole[len(whole)-3:]
-		var groups []string
-		for len(head) > 2 {
-			groups = append([]string{head[len(head)-2:]}, groups...)
-			head = head[:len(head)-2]
-		}
-		if head != "" {
-			groups = append([]string{head}, groups...)
-		}
-		whole = strings.Join(groups, ",") + "," + tail
-	}
-	return fmt.Sprintf("%s₹%s.%02d", sign, whole, paise%100)
-}
+// formatRupees formats paise as ₹1,23,456.78.
+func formatRupees(paise int64) string { return money.Format(paise) }
 
 // formatRate formats basis points as a percentage: 1800 → 18%, 250 → 2.5%.
 func formatRate(bp int) string {

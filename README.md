@@ -55,7 +55,7 @@ internal/<module>   one package per business module:
   invoices   GST tax invoices: drafts, gapless numbering, PDF, email
 internal/platform/scheduler  background jobs run by cmd/api
 internal/platform/whatsapp   WhatsApp Cloud API client
-  reports    dashboards (read-only queries across modules' tables)
+  reports    dashboards and reports, weekly report email (read-only across modules)
 internal/platform/{config,database,httpx,logging,mail,principal,validate}  shared infrastructure
 internal/apitest  black-box tests for the /api routes
 migrations     SQL migrations
@@ -322,3 +322,44 @@ Scripts it lacks, such as Devanagari, print as blanks. E-invoicing
 | `GET /api/v1/invoices/{id}/pdf` | all | The stored PDF, or a DRAFT preview |
 | `POST /api/v1/invoices/{id}/send` | owner or manager+ | Email the PDF to `bill_to_email` |
 | `POST /api/v1/invoices/{id}/cancel` | manager+ | Cancel an issued invoice (`reason`) |
+
+## Reports (phase 7f)
+
+Reports read across the other modules' tables, read-only. Reps see only
+their own deals, contacts and invoices. Periods are IST calendar days
+(`from`/`to` as `YYYY-MM-DD`, both inclusive, at most 731 days apart; by
+default the current month up to today).
+
+**Definitions**
+
+- **Deal value** is `crm_deal_value_paise`: the one-time amount, or a
+  recurring deal's first-year value.
+- **Won and lost** deals count in the period their `closed_at` falls in.
+  The **win rate** is won / (won + lost), by count.
+- A **new customer** is a contact whose **first-ever won deal** closed in
+  the period.
+- **ARR** is the value of all won recurring deals; **MRR** is ARR / 12. No
+  churn is tracked yet, so won subscriptions count until the deal is
+  reopened.
+- The **funnel** follows the contacts created in the period. A contact has
+  reached every stage up to the furthest it has ever been in (its current
+  stage or any stage on its timeline), so a lost opportunity still counts as
+  having reached `opportunity`.
+
+The legacy `GET /api/dashboard/sales` keeps its shape (rupees). Its "new
+customers" now uses the first-won-deal rule, for today (IST).
+
+| Endpoint | Who | Purpose |
+|---|---|---|
+| `GET /api/v1/reports/dashboard?from=&to=` | all | Open, won and lost deals, win rate, average deal size and sales cycle, new customers, new and hot leads, invoiced, ARR and MRR |
+| `GET /api/v1/reports/funnel?from=&to=` | all | Lifecycle funnel with step and overall conversion |
+| `GET /api/v1/reports/pipeline` | all | Open deals by stage: count, value, weighted value, average days in stage |
+| `GET /api/v1/reports/sources?from=&to=` | all | Leads, hot leads, customers, conversion and won value by lead source |
+| `GET /api/v1/reports/reps?from=&to=` | non-reps | Per user: leads assigned, open/won/lost, win rate, overdue tasks |
+| `GET /api/v1/reports/revenue?months=12` | all | Monthly (IST): won deals and value, new ARR, new customers, invoiced |
+| `GET/PUT /api/v1/reports/settings` | all / manager+ | `weekly_email` (on by default) |
+
+**Weekly report email** (the diagram's "auto reports"). From Monday 09:00
+IST, a job emails the previous Monday-to-Sunday summary to each org's
+owners, admins and managers, once per week (recorded in `report_runs`).
+Orgs with no activity, or with `weekly_email` off, get none.

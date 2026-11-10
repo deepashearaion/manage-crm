@@ -30,6 +30,8 @@ func TestSalesDashboard(t *testing.T) {
 			('lost-subscription', 9900, 'recurring', 'yearly', 'Closed Lost')
 		) AS v(title, paise, btype, period, stage)
 		JOIN deal_stages ds ON ds.name = v.stage AND ds.org_id = 1`)
+	// Both won deals are the "Today" contact's: one new customer.
+	s.exec(`UPDATE deals SET contact_id = 1 WHERE title IN ('won', 'won-subscription')`)
 
 	got := wantJSON(t, s.do("GET", "/api/dashboard/sales", nil, token), http.StatusOK)
 	// Deal values are one-time amounts or first-year values; ARR counts only
@@ -80,15 +82,22 @@ func TestCORS(t *testing.T) {
 	}
 }
 
-// "New customers" counts contacts created since midnight IST, independent of
-// the session (UTC) and server time zones.
+// "New customers" are contacts whose first-ever won deal closed today, since
+// midnight IST, whatever the session (UTC) and server time zones.
 func TestSalesDashboardTodayIsIST(t *testing.T) {
 	s := newServer(t)
 	_, token := s.userToken()
 
-	s.exec(`INSERT INTO contacts (org_id, first_name, created_at) VALUES
-		(1, 'just after IST midnight',  date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata' + interval '1 minute'),
-		(1, 'just before IST midnight', date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata' - interval '1 minute')`)
+	s.exec(`INSERT INTO contacts (org_id, first_name) VALUES (1, 'today'), (1, 'yesterday'), (1, 'returning')`)
+	s.exec(`INSERT INTO deals (org_id, title, contact_id, stage_id, status, closed_at)
+		SELECT 1, v.title, v.contact, ds.id, 'won', date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata' + v.offset_by
+		FROM (VALUES
+			('just after IST midnight', 1, interval '1 minute'),
+			('just before IST midnight', 2, interval '-1 minute'),
+			('first win last week', 3, interval '-7 days'),
+			('second win today', 3, interval '2 minutes')
+		) AS v(title, contact, offset_by)
+		JOIN deal_stages ds ON ds.name = 'Closed Won' AND ds.org_id = 1`)
 
 	got := wantJSON(t, s.do("GET", "/api/dashboard/sales", nil, token), http.StatusOK)
 	if got["total_new_customers"] != float64(1) {

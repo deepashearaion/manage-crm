@@ -13,6 +13,7 @@ import (
 	"github.com/deepashearaion/manage-crm/internal/leads"
 	"github.com/deepashearaion/manage-crm/internal/notifications"
 	"github.com/deepashearaion/manage-crm/internal/nurture"
+	"github.com/deepashearaion/manage-crm/internal/platform/money"
 	"github.com/deepashearaion/manage-crm/internal/platform/principal"
 	"github.com/deepashearaion/manage-crm/internal/tasks"
 )
@@ -200,7 +201,7 @@ func (w workflowEvents) DealWon(ctx context.Context, o deals.Outcome) error {
 			Title:      "Review and issue invoice: " + o.Title,
 			Description: fmt.Sprintf("A draft invoice (id %d, %s) was created for the won deal %q.\n"+
 				"Check the customer's billing address, GSTIN and place of supply, and each line's SAC code and GST rate, "+
-				"then issue it and email it to the customer.", inv.ID, formatPaise(inv.TotalPaise), o.Title),
+				"then issue it and email it to the customer.", inv.ID, money.Format(inv.TotalPaise), o.Title),
 			Type:     "todo",
 			Priority: "high",
 			Origin:   tasks.OriginInvoiceReview,
@@ -210,9 +211,6 @@ func (w workflowEvents) DealWon(ctx context.Context, o deals.Outcome) error {
 	}
 	return errors.Join(errs...)
 }
-
-// formatPaise formats paise as rupees, e.g. ₹47,250.00 (no lakh grouping).
-func formatPaise(p int64) string { return fmt.Sprintf("₹%d.%02d", p/100, p%100) }
 
 // DealLost sends the contact back to nurture: into the org's active
 // deal_lost sequence (whose first step's delay is the "re-contact after 30

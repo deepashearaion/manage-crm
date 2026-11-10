@@ -126,9 +126,8 @@ func New(d Deps) *App {
 	dealsForInvoices.svc = dealService
 	deals.Routes(router, deals.NewHandler(dealService, d.Logger), requireUserV1)
 
-	reports.Routes(router,
-		reports.NewHandler(reports.NewService(reports.NewRepository(d.DB)), d.Logger),
-		requireUser)
+	reportService := reports.NewService(reports.NewRepository(d.DB), d.Mailer, cfg.FrontendURL, d.Logger, d.Now)
+	reports.Routes(router, reports.NewHandler(reportService, d.Logger), requireUser, requireUserV1)
 
 	return &App{
 		Handler: httpx.Chain(router,
@@ -141,6 +140,7 @@ func New(d Deps) *App {
 		Jobs: []scheduler.Job{
 			{Name: "nurture", Every: time.Minute, Run: nurtureService.RunDue},
 			{Name: "overdue task reminders", Every: 5 * time.Minute, Run: taskService.RemindOverdue},
+			{Name: "weekly reports", Every: 15 * time.Minute, Run: reportService.SendWeekly},
 		},
 	}
 }
