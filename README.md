@@ -46,7 +46,8 @@ internal/<module>   one package per business module:
     repository.go  SQL (the only place that touches the module's tables)
     model.go       types and errors
   auth       users, login, sessions (refresh tokens), password reset
-  contacts   contacts
+  contacts   contacts, lifecycle stage, lead scores, activity timeline
+  leads      lead intake (forms, WhatsApp, manual), dedupe, scoring, routing
   reports    dashboards (read-only queries across modules' tables)
 internal/platform/{config,database,httpx,logging,mail,principal,validate}  shared infrastructure
 internal/apitest  black-box tests for the /api routes
@@ -79,3 +80,46 @@ or invalid. `APP_ENV` defaults to `production`.
 - Users join an org by invitation (`POST /api/v1/users`, owners/admins):
   they get an email link to set their password. Self sign-up
   (`POST /api/auth/register`) creates a new org with the user as owner.
+
+## Lead workflow (phase 7a)
+
+A lead is a contact whose `lifecycle_stage` is `lead` (then `mql`, `sql`,
+`opportunity`, `customer`, `lost`). Every lead, whatever the channel, goes
+through the same steps:
+
+1. **Capture**: a web form, a WhatsApp message, or a user. Leads are matched
+   to an existing contact in the org by email (case-insensitive) or phone
+   (normalized by `crm_phone_key`: `98765 43210`, `+91-98765-43210` and
+   WhatsApp's `919876543210` are the same number). A match only fills in
+   missing details and never overwrites. Everything goes on the contact's
+   timeline.
+2. **Score**: the sum of the org's active scoring rules, clamped to 0–100.
+   The temperature is `hot` at or above `hot_threshold` (default 70), `warm`
+   at or above `warm_threshold` (default 40), and `cold` otherwise. Every
+   inbound WhatsApp reply re-scores the contact.
+3. **Route**: a new, unowned lead goes to the first matching active
+   assignment rule (round robin among its members), or else to the default
+   owner. Reps own the leads they enter themselves.
+
+| Endpoint | Who | Purpose |
+|---|---|---|
+| `POST /api/v1/intake/forms/{key}` | public | Web form or integration submission (JSON or url-encoded; unknown fields ignored; `website` is a honeypot). Answers 202. |
+| `GET/POST /api/v1/webhooks/whatsapp` | Meta | Subscription handshake; signed (`X-Hub-Signature-256`) inbound messages |
+| `POST /api/v1/leads` | writers | Enter a lead by hand (`channel`: manual, email, phone, api) |
+| `POST /api/v1/leads/{id}/rescore` | writers | Recompute a contact's score |
+| `GET /api/v1/contacts?temperature=&lifecycle_stage=&limit=&before_id=` | all | Contacts with score, newest first |
+| `GET /api/v1/contacts/{id}` | all | One contact with score |
+| `GET /api/v1/contacts/{id}/timeline?limit=&before_id=` | all | Activity timeline, newest first |
+| `POST /api/v1/contacts/{id}/activities` | writers | Log a note, call or email |
+| `PUT /api/v1/contacts/{id}/lifecycle-stage` | writers | Change lifecycle stage |
+| `GET/PATCH /api/v1/lead-settings` | manager+ | Thresholds, default owner |
+| `GET/POST /api/v1/lead-sources`, `PATCH …/{id}`, `POST …/{id}/rotate-key` | manager+ | Web form sources and their public keys |
+| `GET/POST /api/v1/whatsapp-accounts`, `DELETE …/{id}` | manager+ | Which WhatsApp number belongs to the org |
+| `GET/POST /api/v1/scoring-rules`, `PATCH/DELETE …/{id}` | manager+ | Scoring rules |
+| `GET/POST /api/v1/assignment-rules`, `PATCH/DELETE …/{id}` | manager+ | Routing rules |
+
+Scoring criteria: `has_email`, `has_mobile`, `has_company`, `source_equals`,
+`destination_equals`, `channel_used`, `text_contains`,
+`inbound_messages_at_least`. Assignment criteria: `any`, `source_equals`,
+`channel_equals`, `destination_equals`, `temperature_equals`. New orgs get
+eight default scoring rules.
