@@ -95,6 +95,8 @@ func (w workflowEvents) LeadAssigned(ctx context.Context, e leads.LeadAssigned) 
 	})
 }
 
+// managers are the users who can hand out leads: those who may reassign any
+// contact (by default Owner, Admin and Manager).
 func (w workflowEvents) managers(ctx context.Context, orgID int64) ([]int64, error) {
 	users, err := w.users.OrgUsers(ctx, orgID)
 	if err != nil {
@@ -102,7 +104,7 @@ func (w workflowEvents) managers(ctx context.Context, orgID int64) ([]int64, err
 	}
 	var ids []int64
 	for _, u := range users {
-		if u.Principal().ManagesSettings() {
+		if u.Principal().CanReassign(principal.Contacts) {
 			ids = append(ids, u.ID)
 		}
 	}
@@ -299,9 +301,9 @@ func mapNurtureContactErr(err error) error {
 	return err
 }
 
-func (c nurtureContacts) Visible(ctx context.Context, p principal.Principal, contactID int64) error {
-	_, err := c.svc.Visible(ctx, p, contactID)
-	return mapNurtureContactErr(err)
+func (c nurtureContacts) Visible(ctx context.Context, p principal.Principal, contactID int64) (*int64, error) {
+	v, err := c.svc.Visible(ctx, p, contactID)
+	return v.LeadOwnerID, mapNurtureContactErr(err)
 }
 
 func (c nurtureContacts) Recipient(ctx context.Context, orgID, contactID int64) (nurture.Recipient, error) {

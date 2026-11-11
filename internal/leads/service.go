@@ -160,11 +160,12 @@ func (s *Service) raise(ctx context.Context, what string, fn func() error) {
 }
 
 // CaptureByUser is POST /api/v1/leads: a signed-in user entering a lead.
-// Reps own the leads they enter; for managers and above, new leads are
-// routed. A rep who enters someone already owned by another user gets
+// Users who may create contacts only for themselves own the leads they
+// enter; for those who may create them for anyone, new leads are routed.
+// A user who enters someone they cannot see (owned by another user) gets
 // ErrDuplicateContact, without the contact's details.
 func (s *Service) CaptureByUser(ctx context.Context, p principal.Principal, l Lead) (Result, error) {
-	if !p.CanWrite() {
+	if !p.Can(principal.Contacts, principal.Create) {
 		return Result{}, ErrForbidden
 	}
 	switch l.Channel {
@@ -176,7 +177,7 @@ func (s *Service) CaptureByUser(ctx context.Context, p principal.Principal, l Le
 	}
 	l.ActorUserID = &p.UserID
 	l.ExternalID = ""
-	if !p.SeesAllRecords() {
+	if p.Scope(principal.Contacts, principal.Create) != principal.All {
 		l.OwnerID = &p.UserID
 	}
 	res, err := s.Capture(ctx, p.OrgID, l)
@@ -194,12 +195,12 @@ func (s *Service) CaptureByUser(ctx context.Context, p principal.Principal, l Le
 // Rescore recomputes the score of a contact p may see (after the rules
 // changed, for instance).
 func (s *Service) Rescore(ctx context.Context, p principal.Principal, contactID int64) (Result, error) {
-	if !p.CanWrite() {
-		return Result{}, ErrForbidden
-	}
 	owner, err := s.contacts.Visible(ctx, p, contactID)
 	if err != nil {
 		return Result{}, err
+	}
+	if !p.CanOn(principal.Contacts, principal.Edit, owner) {
+		return Result{}, ErrForbidden
 	}
 	sc, err := s.rescore(ctx, p.OrgID, contactID)
 	if err != nil {
@@ -269,17 +270,24 @@ func (s *Service) route(ctx context.Context, orgID, contactID int64, a routingAt
 	return &owner, reason, nil
 }
 
-// Configuration. Reading and changing it needs principal.ManagesSettings.
+// Configuration. Reading it needs settings.view; changing it settings.edit.
 
-func settingsAccess(p principal.Principal) error {
-	if !p.ManagesSettings() {
+func settingsView(p principal.Principal) error {
+	if !p.Can(principal.Settings, principal.View) {
+		return ErrForbidden
+	}
+	return nil
+}
+
+func settingsEdit(p principal.Principal) error {
+	if !p.Can(principal.Settings, principal.Edit) {
 		return ErrForbidden
 	}
 	return nil
 }
 
 func (s *Service) Settings(ctx context.Context, p principal.Principal) (Settings, error) {
-	if err := settingsAccess(p); err != nil {
+	if err := settingsView(p); err != nil {
 		return Settings{}, err
 	}
 	return s.repo.Settings(ctx, p.OrgID)
@@ -296,6 +304,9 @@ type SettingsPatch struct {
 }
 
 func (s *Service) UpdateSettings(ctx context.Context, p principal.Principal, patch SettingsPatch) (Settings, error) {
+	if err := settingsEdit(p); err != nil {
+		return Settings{}, err
+	}
 	cur, err := s.Settings(ctx, p)
 	if err != nil {
 		return Settings{}, err
@@ -322,7 +333,7 @@ func (s *Service) UpdateSettings(ctx context.Context, p principal.Principal, pat
 }
 
 func (s *Service) Sources(ctx context.Context, p principal.Principal) ([]Source, error) {
-	if err := settingsAccess(p); err != nil {
+	if err := settingsView(p); err != nil {
 		return nil, err
 	}
 	return s.repo.Sources(ctx, p.OrgID)
@@ -339,7 +350,7 @@ func validSourceName(name string) error {
 }
 
 func (s *Service) CreateSource(ctx context.Context, p principal.Principal, name, channel string) (Source, error) {
-	if err := settingsAccess(p); err != nil {
+	if err := settingsEdit(p); err != nil {
 		return Source{}, err
 	}
 	name = strings.TrimSpace(name)
@@ -356,7 +367,7 @@ func (s *Service) CreateSource(ctx context.Context, p principal.Principal, name,
 }
 
 func (s *Service) UpdateSource(ctx context.Context, p principal.Principal, id int64, name *string, active *bool, rotateKey bool) (Source, error) {
-	if err := settingsAccess(p); err != nil {
+	if err := settingsEdit(p); err != nil {
 		return Source{}, err
 	}
 	if name != nil {
@@ -381,14 +392,14 @@ func (s *Service) SubmitForm(ctx context.Context, key string, l Lead) (Result, e
 }
 
 func (s *Service) WhatsAppAccounts(ctx context.Context, p principal.Principal) ([]WhatsAppAccount, error) {
-	if err := settingsAccess(p); err != nil {
+	if err := settingsView(p); err != nil {
 		return nil, err
 	}
 	return s.repo.WhatsAppAccounts(ctx, p.OrgID)
 }
 
 func (s *Service) CreateWhatsAppAccount(ctx context.Context, p principal.Principal, a WhatsAppAccount) (WhatsAppAccount, error) {
-	if err := settingsAccess(p); err != nil {
+	if err := settingsEdit(p); err != nil {
 		return WhatsAppAccount{}, err
 	}
 	a.PhoneNumberID = strings.TrimSpace(a.PhoneNumberID)
@@ -407,21 +418,21 @@ func (s *Service) CreateWhatsAppAccount(ctx context.Context, p principal.Princip
 }
 
 func (s *Service) DeleteWhatsAppAccount(ctx context.Context, p principal.Principal, id int64) error {
-	if err := settingsAccess(p); err != nil {
+	if err := settingsEdit(p); err != nil {
 		return err
 	}
 	return s.repo.DeleteWhatsAppAccount(ctx, p.OrgID, id)
 }
 
 func (s *Service) ScoringRules(ctx context.Context, p principal.Principal) ([]ScoringRule, error) {
-	if err := settingsAccess(p); err != nil {
+	if err := settingsView(p); err != nil {
 		return nil, err
 	}
 	return s.repo.ScoringRules(ctx, p.OrgID)
 }
 
 func (s *Service) CreateScoringRule(ctx context.Context, p principal.Principal, r ScoringRule) (ScoringRule, error) {
-	if err := settingsAccess(p); err != nil {
+	if err := settingsEdit(p); err != nil {
 		return ScoringRule{}, err
 	}
 	if err := validateScoringRule(&r); err != nil {
@@ -440,7 +451,7 @@ type ScoringRulePatch struct {
 }
 
 func (s *Service) UpdateScoringRule(ctx context.Context, p principal.Principal, id int64, patch ScoringRulePatch) (ScoringRule, error) {
-	if err := settingsAccess(p); err != nil {
+	if err := settingsEdit(p); err != nil {
 		return ScoringRule{}, err
 	}
 	r, err := s.repo.ScoringRule(ctx, p.OrgID, id)
@@ -459,21 +470,21 @@ func (s *Service) UpdateScoringRule(ctx context.Context, p principal.Principal, 
 }
 
 func (s *Service) DeleteScoringRule(ctx context.Context, p principal.Principal, id int64) error {
-	if err := settingsAccess(p); err != nil {
+	if err := settingsEdit(p); err != nil {
 		return err
 	}
 	return s.repo.DeleteScoringRule(ctx, p.OrgID, id)
 }
 
 func (s *Service) AssignmentRules(ctx context.Context, p principal.Principal) ([]AssignmentRule, error) {
-	if err := settingsAccess(p); err != nil {
+	if err := settingsView(p); err != nil {
 		return nil, err
 	}
 	return s.repo.AssignmentRules(ctx, p.OrgID)
 }
 
 func (s *Service) CreateAssignmentRule(ctx context.Context, p principal.Principal, r AssignmentRule) (AssignmentRule, error) {
-	if err := settingsAccess(p); err != nil {
+	if err := settingsEdit(p); err != nil {
 		return AssignmentRule{}, err
 	}
 	if err := validateAssignmentRule(&r); err != nil {
@@ -495,7 +506,7 @@ type AssignmentRulePatch struct {
 }
 
 func (s *Service) UpdateAssignmentRule(ctx context.Context, p principal.Principal, id int64, patch AssignmentRulePatch) (AssignmentRule, error) {
-	if err := settingsAccess(p); err != nil {
+	if err := settingsEdit(p); err != nil {
 		return AssignmentRule{}, err
 	}
 	r, err := s.repo.AssignmentRule(ctx, p.OrgID, id)
@@ -515,7 +526,7 @@ func (s *Service) UpdateAssignmentRule(ctx context.Context, p principal.Principa
 }
 
 func (s *Service) DeleteAssignmentRule(ctx context.Context, p principal.Principal, id int64) error {
-	if err := settingsAccess(p); err != nil {
+	if err := settingsEdit(p); err != nil {
 		return err
 	}
 	return s.repo.DeleteAssignmentRule(ctx, p.OrgID, id)

@@ -1,76 +1,72 @@
 // Package principal carries the authenticated caller through a request's
-// context. The auth module sets it; other modules read it, so they never
-// depend on how authentication works. The org always comes from here (the
-// signed token), never from client input.
+// context. The auth module sets it, with the permissions of the caller's
+// role loaded fresh for each request; other modules only read it, so they
+// never depend on how authentication or roles work. The org always comes
+// from here (the signed token), never from client input.
 package principal
 
 import "context"
-
-// Role is a user's role within their org.
-type Role string
-
-const (
-	RoleOwner   Role = "owner"
-	RoleAdmin   Role = "admin"
-	RoleManager Role = "manager"
-	RoleRep     Role = "rep"
-	RoleViewer  Role = "viewer"
-)
-
-// Valid reports whether r is one of the defined roles.
-func (r Role) Valid() bool {
-	switch r {
-	case RoleOwner, RoleAdmin, RoleManager, RoleRep, RoleViewer:
-		return true
-	}
-	return false
-}
 
 // Principal is the authenticated caller of a request.
 type Principal struct {
 	UserID int64
 	OrgID  int64
-	Role   Role
+	// RoleID and RoleName name the caller's role.
+	RoleID   int64
+	RoleName string
+	// Owner marks the org's locked owner role: full access to everything.
+	Owner bool
+	// Perms is what the role grants; Owner overrides it.
+	Perms Permissions
 }
 
-// Permissions. Owners and admins can do everything; managers everything
-// except managing users; reps work only on records they own; viewers only
-// read.
-
-// ManagesUsers reports whether p may create users and change roles.
-func (p Principal) ManagesUsers() bool {
-	return p.Role == RoleOwner || p.Role == RoleAdmin
-}
-
-// SeesAllRecords reports whether p may read every record in the org (reps
-// see only records they own).
-func (p Principal) SeesAllRecords() bool {
-	return p.Role != RoleRep
-}
-
-// CanWrite reports whether p may create, change or delete records at all.
-func (p Principal) CanWrite() bool {
-	return p.Role != RoleViewer
-}
-
-// CanReassign reports whether p may change who owns a record.
-func (p Principal) CanReassign() bool {
-	return p.Role == RoleOwner || p.Role == RoleAdmin || p.Role == RoleManager
-}
-
-// ManagesSettings reports whether p may change org-wide configuration such
-// as lead sources, scoring rules and routing rules.
-func (p Principal) ManagesSettings() bool {
-	return p.Role == RoleOwner || p.Role == RoleAdmin || p.Role == RoleManager
-}
-
-// CanWriteRecord reports whether p may change or delete a record owned by
-// ownerID (nil when the record has no owner).
-func (p Principal) CanWriteRecord(ownerID *int64) bool {
-	if !p.CanWrite() {
-		return false
+// Scope is how far p may perform action on module.
+func (p Principal) Scope(m Module, a Action) Scope {
+	if p.Owner {
+		return All
 	}
-	return p.SeesAllRecords() || (ownerID != nil && *ownerID == p.UserID)
+	return p.Perms.Scope(m, a)
+}
+
+// Can reports whether p may perform action on module at all (on its own
+// records at least).
+func (p Principal) Can(m Module, a Action) bool {
+	return p.Scope(m, a) != None
+}
+
+// SeesAll reports whether p may view every record of module, not just the
+// ones they own.
+func (p Principal) SeesAll(m Module) bool {
+	return p.Scope(m, View) == All
+}
+
+// CanOn reports whether p may perform action on a record of module owned
+// by ownerID (nil when it has no owner). With scope "own" only records
+// owned by p qualify. For Create, ownerID is who the new record will
+// belong to.
+func (p Principal) CanOn(m Module, a Action, ownerID *int64) bool {
+	switch p.Scope(m, a) {
+	case All:
+		return true
+	case Own:
+		return ownerID != nil && *ownerID == p.UserID
+	}
+	return false
+}
+
+// CanReassign reports whether p may change who owns a record of module:
+// that needs edit access to every record.
+func (p Principal) CanReassign(m Module) bool {
+	return p.Scope(m, Edit) == All
+}
+
+// Effective is the caller's full permission set (every catalog entry),
+// as the frontend needs it to show or hide controls.
+func (p Principal) Effective() Permissions {
+	if p.Owner {
+		return FullAccess()
+	}
+	return p.Perms.Normalized()
 }
 
 type ctxKey struct{}

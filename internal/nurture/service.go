@@ -46,11 +46,23 @@ func NewService(repo *Repository, contacts Contacts, numbers Numbers, mailer mai
 
 // Sequences (configuration: managers and above change them; everyone reads).
 
+const module = principal.Nurture
+
+// Sequences are org-wide: seeing them needs nurture.view; creating, changing
+// and deleting them needs scope "all" on nurture.create, edit and delete.
+// Enrolling and stopping contacts follow the contact's owner.
+
 func (s *Service) Sequences(ctx context.Context, p principal.Principal) ([]Sequence, error) {
+	if !p.Can(module, principal.View) {
+		return nil, ErrForbidden
+	}
 	return s.repo.Sequences(ctx, p.OrgID)
 }
 
 func (s *Service) Sequence(ctx context.Context, p principal.Principal, id int64) (Sequence, error) {
+	if !p.Can(module, principal.View) {
+		return Sequence{}, ErrForbidden
+	}
 	return s.repo.Sequence(ctx, p.OrgID, id)
 }
 
@@ -73,7 +85,7 @@ func apply(seq *Sequence, in SequenceInput) {
 }
 
 func (s *Service) CreateSequence(ctx context.Context, p principal.Principal, in SequenceInput) (Sequence, error) {
-	if !p.ManagesSettings() {
+	if p.Scope(module, principal.Create) != principal.All {
 		return Sequence{}, ErrForbidden
 	}
 	seq := Sequence{Trigger: TriggerManual, StopOnReply: true}
@@ -87,7 +99,7 @@ func (s *Service) CreateSequence(ctx context.Context, p principal.Principal, in 
 // UpdateSequence changes a sequence. Active enrollments continue from their
 // current step index in the new steps.
 func (s *Service) UpdateSequence(ctx context.Context, p principal.Principal, id int64, in SequenceInput) (Sequence, error) {
-	if !p.ManagesSettings() {
+	if p.Scope(module, principal.Edit) != principal.All {
 		return Sequence{}, ErrForbidden
 	}
 	seq, err := s.repo.Sequence(ctx, p.OrgID, id)
@@ -102,7 +114,7 @@ func (s *Service) UpdateSequence(ctx context.Context, p principal.Principal, id 
 }
 
 func (s *Service) DeleteSequence(ctx context.Context, p principal.Principal, id int64) error {
-	if !p.ManagesSettings() {
+	if p.Scope(module, principal.Delete) != principal.All {
 		return ErrForbidden
 	}
 	return s.repo.Delete(ctx, p.OrgID, id)
@@ -112,11 +124,12 @@ func (s *Service) DeleteSequence(ctx context.Context, p principal.Principal, id 
 
 // Enroll puts a contact p may see into a sequence by hand.
 func (s *Service) Enroll(ctx context.Context, p principal.Principal, sequenceID, contactID int64) (Enrollment, error) {
-	if !p.CanWrite() {
-		return Enrollment{}, ErrForbidden
-	}
-	if err := s.contacts.Visible(ctx, p, contactID); err != nil {
+	owner, err := s.contacts.Visible(ctx, p, contactID)
+	if err != nil {
 		return Enrollment{}, err
+	}
+	if !p.CanOn(module, principal.Create, owner) {
+		return Enrollment{}, ErrForbidden
 	}
 	seq, err := s.repo.Sequence(ctx, p.OrgID, sequenceID)
 	if err != nil {
@@ -176,12 +189,19 @@ func (s *Service) StopForContact(ctx context.Context, orgID, contactID int64, re
 }
 
 func (s *Service) Enrollments(ctx context.Context, p principal.Principal, contactID, sequenceID int64, status string, limit, offset int) ([]Enrollment, error) {
+	if !p.Can(module, principal.View) {
+		return nil, ErrForbidden
+	}
 	if contactID != 0 {
-		if err := s.contacts.Visible(ctx, p, contactID); err != nil {
+		owner, err := s.contacts.Visible(ctx, p, contactID)
+		if err != nil {
 			return nil, err
 		}
-	} else if !p.SeesAllRecords() {
-		return nil, fieldErr("contact_id", "required", "Reps list enrollments per contact.")
+		if !p.CanOn(module, principal.View, owner) {
+			return nil, ErrForbidden
+		}
+	} else if !p.SeesAll(module) {
+		return nil, fieldErr("contact_id", "required", "List enrollments per contact (your role sees only your own contacts' enrollments).")
 	}
 	if limit <= 0 || limit > 200 {
 		limit = 50
@@ -191,14 +211,15 @@ func (s *Service) Enrollments(ctx context.Context, p principal.Principal, contac
 
 // Stop ends an enrollment by hand.
 func (s *Service) Stop(ctx context.Context, p principal.Principal, id int64) (Enrollment, error) {
-	if !p.CanWrite() {
-		return Enrollment{}, ErrForbidden
-	}
 	e, err := s.repo.Enrollment(ctx, p.OrgID, id)
 	if err != nil {
 		return Enrollment{}, err
 	}
-	if err := s.contacts.Visible(ctx, p, e.ContactID); err != nil {
+	owner, err := s.contacts.Visible(ctx, p, e.ContactID)
+	if err == nil && !p.CanOn(module, principal.Edit, owner) {
+		return Enrollment{}, ErrForbidden
+	}
+	if err != nil {
 		return Enrollment{}, ErrNotFound
 	}
 	e, err = s.repo.Finish(ctx, p.OrgID, id, StatusStopped, StopManual)

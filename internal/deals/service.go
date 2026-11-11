@@ -33,9 +33,13 @@ const (
 	lifecycleLost        = "lost"
 )
 
+const module = principal.Deals
+
+// scope is what p may see: their org, and only the deals they own unless
+// their role sees all deals.
 func scope(p principal.Principal) Scope {
 	s := Scope{OrgID: p.OrgID}
-	if !p.SeesAllRecords() {
+	if !p.SeesAll(module) {
 		s.OwnerID = &p.UserID
 	}
 	return s
@@ -97,7 +101,7 @@ func validateStage(st *Stage) error {
 }
 
 func (s *Service) CreateStage(ctx context.Context, p principal.Principal, in StageInput) (Stage, error) {
-	if !p.ManagesSettings() {
+	if !p.Can(principal.Settings, principal.Edit) {
 		return Stage{}, ErrForbidden
 	}
 	st := Stage{Kind: KindOpen, Probability: 10}
@@ -112,7 +116,7 @@ func (s *Service) CreateStage(ctx context.Context, p principal.Principal, in Sta
 }
 
 func (s *Service) UpdateStage(ctx context.Context, p principal.Principal, id int64, in StageInput) (Stage, error) {
-	if !p.ManagesSettings() {
+	if !p.Can(principal.Settings, principal.Edit) {
 		return Stage{}, ErrForbidden
 	}
 	st, err := s.repo.Stage(ctx, p.OrgID, id)
@@ -138,7 +142,7 @@ func applyStage(st *Stage, in StageInput) {
 }
 
 func (s *Service) DeleteStage(ctx context.Context, p principal.Principal, id int64) error {
-	if !p.ManagesSettings() {
+	if !p.Can(principal.Settings, principal.Edit) {
 		return ErrForbidden
 	}
 	return s.repo.DeleteStage(ctx, p.OrgID, id)
@@ -201,6 +205,9 @@ const (
 )
 
 func (s *Service) List(ctx context.Context, p principal.Principal, f Filter) ([]Deal, error) {
+	if !p.Can(module, principal.View) {
+		return nil, ErrForbidden
+	}
 	if f.Status != "" && !slices.Contains([]string{KindOpen, KindWon, KindLost}, f.Status) {
 		return nil, fieldErr("status", "invalid", "Status must be open, won or lost.")
 	}
@@ -216,6 +223,9 @@ func (s *Service) List(ctx context.Context, p principal.Principal, f Filter) ([]
 }
 
 func (s *Service) Get(ctx context.Context, p principal.Principal, id int64) (Deal, error) {
+	if !p.Can(module, principal.View) {
+		return Deal{}, ErrForbidden
+	}
 	d, err := s.repo.Get(ctx, scope(p), id)
 	if err != nil {
 		return Deal{}, err
@@ -223,17 +233,15 @@ func (s *Service) Get(ctx context.Context, p principal.Principal, id int64) (Dea
 	return s.withProbability(d), nil
 }
 
-// Create adds a deal in an open stage (the first one by default). Reps own
-// the deals they create; the stage's required fields must be filled.
+// Create adds a deal in an open stage (the first one by default), owned by
+// the caller unless they may create deals for others; the stage's
+// required fields must be filled.
 func (s *Service) Create(ctx context.Context, p principal.Principal, in Input) (Deal, error) {
-	if !p.CanWrite() {
-		return Deal{}, ErrForbidden
-	}
 	owner := p.UserID
 	if in.OwnerID != nil {
 		owner = *in.OwnerID
 	}
-	if owner != p.UserID && !p.CanReassign() {
+	if !p.CanOn(module, principal.Create, &owner) {
 		return Deal{}, ErrForbidden
 	}
 	d := Deal{
@@ -285,11 +293,11 @@ func (s *Service) Update(ctx context.Context, p principal.Principal, id int64, p
 	if err != nil {
 		return Deal{}, err
 	}
-	if !p.CanWriteRecord(d.OwnerID) {
+	if !p.CanOn(module, principal.Edit, d.OwnerID) {
 		return Deal{}, ErrForbidden
 	}
 	if patch.OwnerID != nil && (d.OwnerID == nil || *patch.OwnerID != *d.OwnerID) {
-		if !p.CanReassign() {
+		if !p.CanReassign(module) {
 			return Deal{}, ErrForbidden
 		}
 		d.OwnerID = patch.OwnerID
@@ -341,7 +349,7 @@ func (s *Service) Move(ctx context.Context, p principal.Principal, id, stageID i
 	if err != nil {
 		return Deal{}, err
 	}
-	if !p.CanWriteRecord(d.OwnerID) {
+	if !p.CanOn(module, principal.Edit, d.OwnerID) {
 		return Deal{}, ErrForbidden
 	}
 	st, err := s.repo.Stage(ctx, p.OrgID, stageID)
@@ -444,13 +452,16 @@ func (s *Service) Delete(ctx context.Context, p principal.Principal, id int64) e
 	if err != nil {
 		return err
 	}
-	if !p.CanWriteRecord(d.OwnerID) {
+	if !p.CanOn(module, principal.Delete, d.OwnerID) {
 		return ErrForbidden
 	}
 	return s.repo.Delete(ctx, scope(p), id)
 }
 
 func (s *Service) History(ctx context.Context, p principal.Principal, id int64) ([]HistoryEntry, error) {
+	if !p.Can(module, principal.View) {
+		return nil, ErrForbidden
+	}
 	if _, err := s.repo.Get(ctx, scope(p), id); err != nil {
 		return nil, err
 	}
@@ -461,6 +472,9 @@ func (s *Service) History(ctx context.Context, p principal.Principal, id int64) 
 // (YYYY-MM, default this month), over the deals the caller may see,
 // optionally only one owner's.
 func (s *Service) Forecast(ctx context.Context, p principal.Principal, from string, months int, ownerID int64) (Forecast, error) {
+	if !p.Can(module, principal.View) {
+		return Forecast{}, ErrForbidden
+	}
 	now := s.now()
 	start, err := monthStart(from, now)
 	if err != nil {
@@ -487,5 +501,8 @@ func apply[T any](dst *T, v *T) {
 
 // Visible returns a deal p may see (for other modules, e.g. invoicing).
 func (s *Service) Visible(ctx context.Context, p principal.Principal, id int64) (Deal, error) {
+	if !p.Can(module, principal.View) {
+		return Deal{}, ErrNotFound
+	}
 	return s.repo.Get(ctx, scope(p), id)
 }

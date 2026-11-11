@@ -28,6 +28,10 @@ func (h *Handler) SalesDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	d, err := h.svc.SalesDashboard(r.Context(), p)
+	if errors.Is(err, ErrForbidden) {
+		http.Error(w, "You do not have permission to perform this action", http.StatusForbidden)
+		return
+	}
 	if err != nil {
 		h.logger.ErrorContext(r.Context(), "sales dashboard", slog.Any("error", err))
 		http.Error(w, "Failed to load sales dashboard", http.StatusInternalServerError)

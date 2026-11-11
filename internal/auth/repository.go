@@ -2,15 +2,15 @@ package auth
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
-
-	"github.com/deepashearaion/manage-crm/internal/platform/principal"
 )
 
 // Repository holds all of the auth module's SQL: users, password reset
@@ -23,35 +23,48 @@ func NewRepository(db *pgxpool.Pool) *Repository {
 	return &Repository{db: db}
 }
 
-const userColumns = `id, org_id, role, name, email, password_hash, created_at`
+// selectUser reads users with their role; append a WHERE clause.
+const selectUser = `SELECT u.id, u.org_id, u.role_id, r.name, r.is_owner, r.permissions,
+	u.name, u.email, u.password_hash, u.created_at
+	FROM users u JOIN roles r ON r.id = u.role_id `
 
 func scanUser(row pgx.Row) (User, error) {
 	var u User
-	err := row.Scan(&u.ID, &u.OrgID, &u.Role, &u.Name, &u.Email, &u.PasswordHash, &u.CreatedAt)
+	var perms []byte
+	err := row.Scan(&u.ID, &u.OrgID, &u.RoleID, &u.RoleName, &u.RoleOwner, &perms,
+		&u.Name, &u.Email, &u.PasswordHash, &u.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return User{}, ErrUserNotFound
 	}
-	return u, err
+	if err != nil {
+		return User{}, err
+	}
+	if err := json.Unmarshal(perms, &u.Perms); err != nil {
+		return User{}, fmt.Errorf("role %d permissions: %w", u.RoleID, err)
+	}
+	return u, nil
 }
 
 func (r *Repository) UserByEmail(ctx context.Context, email string) (User, error) {
-	return scanUser(r.db.QueryRow(ctx, `SELECT `+userColumns+` FROM users WHERE email = $1`, email))
+	return scanUser(r.db.QueryRow(ctx, selectUser+`WHERE u.email = $1`, email))
 }
 
 func (r *Repository) UserByID(ctx context.Context, id int64) (User, error) {
-	return scanUser(r.db.QueryRow(ctx, `SELECT `+userColumns+` FROM users WHERE id = $1`, id))
+	return scanUser(r.db.QueryRow(ctx, selectUser+`WHERE u.id = $1`, id))
 }
 
-// CreateOrgWithOwner creates an org and its first user (role owner) in one
-// transaction, running onCreated inside it. A duplicate email returns
-// ErrEmailTaken.
+// CreateOrgWithOwner creates an org, its default roles and its first user
+// (with the owner role) in one transaction, running onCreated inside it. A
+// duplicate email returns ErrEmailTaken.
 func (r *Repository) CreateOrgWithOwner(ctx context.Context, orgName string, owner User, onCreated OrgCreatedHook) (User, error) {
 	err := pgx.BeginFunc(ctx, r.db, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx, `INSERT INTO orgs (name) VALUES ($1) RETURNING id`, orgName).Scan(&owner.OrgID); err != nil {
 			return err
 		}
-		owner.Role = principal.RoleOwner
 		var err error
+		if owner.RoleID, err = seedRoles(ctx, tx, owner.OrgID); err != nil {
+			return err
+		}
 		if owner.ID, err = insertUser(ctx, tx, owner); err != nil {
 			return err
 		}
@@ -74,8 +87,8 @@ func (r *Repository) CreateUser(ctx context.Context, u User) (User, error) {
 func insertUser(ctx context.Context, db queryRower, u User) (int64, error) {
 	var id int64
 	err := db.QueryRow(ctx,
-		`INSERT INTO users (org_id, role, name, email, password_hash) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-		u.OrgID, u.Role, u.Name, u.Email, u.PasswordHash,
+		`INSERT INTO users (org_id, role_id, name, email, password_hash) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		u.OrgID, u.RoleID, u.Name, u.Email, u.PasswordHash,
 	).Scan(&id)
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -238,7 +251,7 @@ func insertRefreshToken(ctx context.Context, db queryRower, userID int64, family
 
 // UsersInOrg lists an org's users, oldest first.
 func (r *Repository) UsersInOrg(ctx context.Context, orgID int64) ([]User, error) {
-	rows, err := r.db.Query(ctx, `SELECT `+userColumns+` FROM users WHERE org_id = $1 ORDER BY id`, orgID)
+	rows, err := r.db.Query(ctx, selectUser+`WHERE u.org_id = $1 ORDER BY u.id`, orgID)
 	if err != nil {
 		return nil, err
 	}
@@ -257,16 +270,49 @@ func (r *Repository) UsersInOrg(ctx context.Context, orgID int64) ([]User, error
 
 // UserInOrg returns a user of orgID, or ErrUserNotFound.
 func (r *Repository) UserInOrg(ctx context.Context, orgID, userID int64) (User, error) {
-	return scanUser(r.db.QueryRow(ctx, `SELECT `+userColumns+` FROM users WHERE org_id = $1 AND id = $2`, orgID, userID))
+	return scanUser(r.db.QueryRow(ctx, selectUser+`WHERE u.org_id = $1 AND u.id = $2`, orgID, userID))
 }
 
-// SetRole changes a user's role within orgID. Demoting the org's only owner
-// returns ErrLastOwner; the org's owners are locked so two demotions cannot
-// race past the check.
-func (r *Repository) SetRole(ctx context.Context, orgID, userID int64, role principal.Role) (User, error) {
-	var updated User
+// RenameUser changes a user's name.
+func (r *Repository) RenameUser(ctx context.Context, orgID, userID int64, name string) (User, error) {
+	tag, err := r.db.Exec(ctx, `UPDATE users SET name = $3, updated_at = now() WHERE org_id = $1 AND id = $2`, orgID, userID, name)
+	if err != nil {
+		return User{}, err
+	}
+	if tag.RowsAffected() == 0 {
+		return User{}, ErrUserNotFound
+	}
+	return r.UserInOrg(ctx, orgID, userID)
+}
+
+// SetPassword replaces a user's password and ends all of their sessions.
+func (r *Repository) SetPassword(ctx context.Context, orgID, userID int64, passwordHash string) error {
+	return pgx.BeginFunc(ctx, r.db, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `UPDATE users SET password_hash = $3, updated_at = now() WHERE org_id = $1 AND id = $2`,
+			orgID, userID, passwordHash)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return ErrUserNotFound
+		}
+		if _, err := tx.Exec(ctx, `UPDATE password_reset_tokens SET used_at = now() WHERE user_id = $1 AND used_at IS NULL`, userID); err != nil {
+			return err
+		}
+		_, err = tx.Exec(ctx, `UPDATE refresh_tokens SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL`, userID)
+		return err
+	})
+}
+
+// SetRole gives a user of orgID the role roleID (which must be one of the
+// org's roles). Moving the org's only owner to another role returns
+// ErrLastOwner; the org's owners are locked so two changes cannot race
+// past the check.
+func (r *Repository) SetRole(ctx context.Context, orgID, userID, roleID int64) (User, error) {
 	err := pgx.BeginFunc(ctx, r.db, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT id FROM users WHERE org_id = $1 AND role = 'owner' FOR UPDATE`, orgID)
+		rows, err := tx.Query(ctx,
+			`SELECT u.id FROM users u JOIN roles r ON r.id = u.role_id
+			WHERE u.org_id = $1 AND r.is_owner FOR UPDATE OF u`, orgID)
 		if err != nil {
 			return err
 		}
@@ -283,15 +329,26 @@ func (r *Repository) SetRole(ctx context.Context, orgID, userID int64, role prin
 		if err := rows.Err(); err != nil {
 			return err
 		}
-		if owners[userID] && role != principal.RoleOwner && len(owners) == 1 {
+		var toOwner bool
+		err = tx.QueryRow(ctx, `SELECT is_owner FROM roles WHERE org_id = $1 AND id = $2`, orgID, roleID).Scan(&toOwner)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrRoleNotFound
+		}
+		if err != nil {
+			return err
+		}
+		if owners[userID] && !toOwner && len(owners) == 1 {
 			return ErrLastOwner
 		}
-
-		updated, err = scanUser(tx.QueryRow(ctx,
-			`UPDATE users SET role = $3, updated_at = now() WHERE org_id = $1 AND id = $2 RETURNING `+userColumns,
-			orgID, userID, role,
-		))
+		tag, err := tx.Exec(ctx, `UPDATE users SET role_id = $3, updated_at = now() WHERE org_id = $1 AND id = $2`,
+			orgID, userID, roleID)
+		if err == nil && tag.RowsAffected() == 0 {
+			err = ErrUserNotFound
+		}
 		return err
 	})
-	return updated, err
+	if err != nil {
+		return User{}, err
+	}
+	return r.UserInOrg(ctx, orgID, userID)
 }

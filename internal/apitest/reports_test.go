@@ -127,7 +127,7 @@ func TestReportsRepsAndRevenue(t *testing.T) {
 	byName := map[string]map[string]any{}
 	for _, x := range reps {
 		m := x.(map[string]any)
-		byName[m["role"].(string)] = m
+		byName[strings.ToLower(m["role"].(string))] = m
 	}
 	// Leads the owner entered were routed (no rules: unowned), so none are theirs.
 	if o := byName["owner"]; o["leads_assigned"] != 0.0 || fmt.Sprint(o["won"]) != "map[count:2 value_paise:160000]" || o["win_rate_percent"] != 66.7 {

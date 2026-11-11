@@ -10,20 +10,25 @@ import (
 	"github.com/deepashearaion/manage-crm/internal/platform/principal"
 )
 
-// User is an account that can sign in.
+// User is an account that can sign in, with its role.
 type User struct {
 	ID           int64
 	OrgID        int64
-	Role         principal.Role
+	RoleID       int64
+	RoleName     string
+	RoleOwner    bool // the org's locked owner role
+	Perms        principal.Permissions
 	Name         string
 	Email        string
 	PasswordHash string
 	CreatedAt    time.Time
 }
 
-// Principal is the caller identity a user's access token carries.
+// Principal is the user as a request's caller, with their role's
+// permissions.
 func (u User) Principal() principal.Principal {
-	return principal.Principal{UserID: u.ID, OrgID: u.OrgID, Role: u.Role}
+	return principal.Principal{UserID: u.ID, OrgID: u.OrgID, RoleID: u.RoleID, RoleName: u.RoleName,
+		Owner: u.RoleOwner, Perms: u.Perms}
 }
 
 // OrgCreatedHook runs inside the transaction that creates an org, so other
@@ -60,6 +65,28 @@ var (
 
 	ErrUserNotFound = errors.New("user not found")
 	ErrForbidden    = errors.New("not allowed")
-	ErrInvalidRole  = errors.New("invalid role")
 	ErrLastOwner    = errors.New("an organization must keep at least one owner")
+
+	ErrRoleNotFound  = errors.New("role not found")
+	ErrRoleLocked    = errors.New("the owner role cannot be changed or deleted")
+	ErrRoleInUse     = errors.New("role is assigned to users")
+	ErrRoleNameTaken = errors.New("role name already used")
+	ErrOwnRole       = errors.New("you cannot change your own role")
 )
+
+// ExceedsError means a role would grant more than the caller has, which
+// would let them raise their own access.
+type ExceedsError struct {
+	Permission string // e.g. "deals.edit"
+}
+
+func (e *ExceedsError) Error() string {
+	return "the role grants " + e.Permission + " beyond your own access"
+}
+
+// FieldError is a validation failure on one request field.
+type FieldError struct {
+	Field, Problem, Message string
+}
+
+func (e *FieldError) Error() string { return e.Message }

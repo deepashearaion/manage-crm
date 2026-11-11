@@ -27,9 +27,10 @@ func NewService(repo *Repository, mailer mail.Mailer, frontendURL string, logger
 	return &Service{repo: repo, mailer: mailer, frontendURL: frontendURL, logger: logger, now: now}
 }
 
-// owner is the record owner a report is limited to: reps see only theirs.
+// owner is the record owner a report is limited to: with reports.view "own"
+// a user sees only their own figures.
 func owner(p principal.Principal) *int64 {
-	if p.SeesAllRecords() {
+	if p.SeesAll(principal.Reports) {
 		return nil
 	}
 	return &p.UserID
@@ -37,10 +38,16 @@ func owner(p principal.Principal) *int64 {
 
 // SalesDashboard is the legacy dashboard for the caller.
 func (s *Service) SalesDashboard(ctx context.Context, p principal.Principal) (SalesDashboard, error) {
+	if !p.Can(principal.Reports, principal.View) {
+		return SalesDashboard{}, ErrForbidden
+	}
 	return s.repo.SalesDashboard(ctx, p.OrgID, owner(p), s.now())
 }
 
 func (s *Service) Dashboard(ctx context.Context, p principal.Principal, from, to string) (Dashboard, error) {
+	if !p.Can(principal.Reports, principal.View) {
+		return Dashboard{}, ErrForbidden
+	}
 	period, err := parsePeriod(from, to, s.now())
 	if err != nil {
 		return Dashboard{}, err
@@ -49,6 +56,9 @@ func (s *Service) Dashboard(ctx context.Context, p principal.Principal, from, to
 }
 
 func (s *Service) Funnel(ctx context.Context, p principal.Principal, from, to string) (Funnel, error) {
+	if !p.Can(principal.Reports, principal.View) {
+		return Funnel{}, ErrForbidden
+	}
 	period, err := parsePeriod(from, to, s.now())
 	if err != nil {
 		return Funnel{}, err
@@ -57,10 +67,16 @@ func (s *Service) Funnel(ctx context.Context, p principal.Principal, from, to st
 }
 
 func (s *Service) Pipeline(ctx context.Context, p principal.Principal) ([]PipelineStage, error) {
+	if !p.Can(principal.Reports, principal.View) {
+		return nil, ErrForbidden
+	}
 	return s.repo.Pipeline(ctx, p.OrgID, owner(p), s.now())
 }
 
 func (s *Service) Sources(ctx context.Context, p principal.Principal, from, to string) ([]SourceRow, error) {
+	if !p.Can(principal.Reports, principal.View) {
+		return nil, ErrForbidden
+	}
 	period, err := parsePeriod(from, to, s.now())
 	if err != nil {
 		return nil, err
@@ -68,9 +84,9 @@ func (s *Service) Sources(ctx context.Context, p principal.Principal, from, to s
 	return s.repo.Sources(ctx, p.OrgID, owner(p), period)
 }
 
-// Reps compares users; reps (who see only their own records) may not.
+// Reps compares users; it needs reports.view for the whole org.
 func (s *Service) Reps(ctx context.Context, p principal.Principal, from, to string) ([]RepRow, error) {
-	if !p.SeesAllRecords() {
+	if !p.SeesAll(principal.Reports) {
 		return nil, ErrForbidden
 	}
 	period, err := parsePeriod(from, to, s.now())
@@ -82,6 +98,9 @@ func (s *Service) Reps(ctx context.Context, p principal.Principal, from, to stri
 
 // Revenue covers the last `months` IST months, ending with the current one.
 func (s *Service) Revenue(ctx context.Context, p principal.Principal, months int) ([]RevenueMonth, error) {
+	if !p.Can(principal.Reports, principal.View) {
+		return nil, ErrForbidden
+	}
 	if months == 0 {
 		months = 12
 	}
@@ -103,7 +122,7 @@ func (s *Service) Settings(ctx context.Context, p principal.Principal) (Settings
 }
 
 func (s *Service) SaveSettings(ctx context.Context, p principal.Principal, weekly bool) (Settings, error) {
-	if !p.ManagesSettings() {
+	if !p.Can(principal.Settings, principal.Edit) {
 		return Settings{}, ErrForbidden
 	}
 	return s.repo.SaveSettings(ctx, p.OrgID, weekly)

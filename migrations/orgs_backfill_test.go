@@ -99,7 +99,8 @@ func TestContactOwnerMustShareOrg(t *testing.T) {
 
 	if _, err := db.Exec(ctx, `
 		INSERT INTO orgs (name) VALUES ('A'), ('B');
-		INSERT INTO users (name, email, password_hash, org_id, role) VALUES ('In B', 'b@example.com', 'x', 2, 'rep');
+		INSERT INTO roles (org_id, name) VALUES (2, 'Rep');
+		INSERT INTO users (name, email, password_hash, org_id, role_id) VALUES ('In B', 'b@example.com', 'x', 2, 1);
 	`); err != nil {
 		t.Fatal(err)
 	}

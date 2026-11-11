@@ -22,13 +22,14 @@ func NewJWT(secret []byte, ttl time.Duration) *JWT {
 // TTL is how long issued access tokens stay valid.
 func (j *JWT) TTL() time.Duration { return j.ttl }
 
-// Generate issues an access token carrying the caller's user, org and role.
+// Generate issues an access token carrying the caller's user and org. The
+// role is not in the token: it is loaded for each request, so role changes
+// apply at once.
 func (j *JWT) Generate(p principal.Principal) (string, error) {
 	now := time.Now()
 	return jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"user_id": p.UserID,
 		"org_id":  p.OrgID,
-		"role":    string(p.Role),
 		"exp":     now.Add(j.ttl).Unix(),
 		"iat":     now.Unix(),
 	}).SignedString(j.secret)

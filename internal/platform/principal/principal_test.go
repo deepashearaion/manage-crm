@@ -1,27 +1,88 @@
 package principal
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
-func TestPermissions(t *testing.T) {
+func TestScopes(t *testing.T) {
 	own, other := int64(1), int64(2)
-	type perms struct{ users, all, write, reassign, settings, ownRecord, otherRecord bool }
-	for role, want := range map[Role]perms{
-		RoleOwner:   {true, true, true, true, true, true, true},
-		RoleAdmin:   {true, true, true, true, true, true, true},
-		RoleManager: {false, true, true, true, true, true, true},
-		RoleRep:     {false, false, true, false, false, true, false},
-		RoleViewer:  {false, true, false, false, false, false, false},
-	} {
-		p := Principal{UserID: own, OrgID: 9, Role: role}
-		got := perms{p.ManagesUsers(), p.SeesAllRecords(), p.CanWrite(), p.CanReassign(), p.ManagesSettings(), p.CanWriteRecord(&own), p.CanWriteRecord(&other)}
-		if got != want {
-			t.Errorf("%s: got %+v, want %+v", role, got, want)
+	rep := Principal{UserID: own, OrgID: 9, Perms: Permissions{
+		Deals: {View: Own, Create: Own, Edit: Own},
+		Tasks: {View: All, Edit: All},
+	}}
+	cases := []struct {
+		name string
+		got  bool
+		want bool
+	}{
+		{"own deal edit", rep.CanOn(Deals, Edit, &own), true},
+		{"other deal edit", rep.CanOn(Deals, Edit, &other), false},
+		{"unowned deal edit", rep.CanOn(Deals, Edit, nil), false},
+		{"deal delete", rep.CanOn(Deals, Delete, &own), false},
+		{"sees all deals", rep.SeesAll(Deals), false},
+		{"sees all tasks", rep.SeesAll(Tasks), true},
+		{"reassign tasks", rep.CanReassign(Tasks), true},
+		{"reassign deals", rep.CanReassign(Deals), false},
+		{"unknown module", rep.Can(Invoices, View), false},
+	}
+	for _, c := range cases {
+		if c.got != c.want {
+			t.Errorf("%s = %v, want %v", c.name, c.got, c.want)
 		}
 	}
-	if (Principal{UserID: own, Role: RoleRep}).CanWriteRecord(nil) {
-		t.Error("rep may write an unowned record")
+
+	owner := Principal{UserID: own, Owner: true}
+	if !owner.CanOn(Roles, Delete, &other) || !owner.SeesAll(Reports) {
+		t.Error("owner lacks access")
 	}
-	if Role("superuser").Valid() || !RoleViewer.Valid() {
-		t.Error("Role.Valid")
+	if eff := owner.Effective(); eff.Scope(Users, Create) != All {
+		t.Errorf("owner effective = %v", eff)
+	}
+	if eff := rep.Effective(); eff.Scope(Invoices, View) != None || len(eff) != len(Catalog) {
+		t.Errorf("rep effective = %v", eff)
+	}
+}
+
+func TestValidate(t *testing.T) {
+	ok := []Permissions{
+		{},
+		FullAccess(),
+		{Deals: {View: Own, Edit: Own}, Settings: {View: All, Edit: All}},
+		{Deals: {Create: All}}, // may create for others without seeing deals
+	}
+	for _, ps := range ok {
+		if err := ps.Validate(); err != nil {
+			t.Errorf("%v: %v", ps, err)
+		}
+	}
+	bad := map[string]Permissions{
+		"permissions.billing.view":  {"billing": {View: All}},
+		"permissions.deals.approve": {Deals: {"approve": All}},
+		"permissions.settings.view": {Settings: {View: Own}}, // org-wide only
+		"permissions.deals.view":    {Deals: {View: "some"}},
+		"permissions.deals.edit":    {Deals: {View: Own, Edit: All}},
+		"permissions.tasks.delete":  {Tasks: {Delete: Own}},
+		"permissions.reports.edit":  {Reports: {Edit: All}},
+	}
+	for field, ps := range bad {
+		err := ps.Validate()
+		var pe *PermissionError
+		if !errors.As(err, &pe) || pe.Field != field {
+			t.Errorf("%v: error %v, want field %s", ps, err, field)
+		}
+	}
+}
+
+func TestWithin(t *testing.T) {
+	limit := Permissions{Deals: {View: All, Edit: Own}}
+	if ok, _ := (Permissions{Deals: {View: Own, Edit: Own}}).Within(limit); !ok {
+		t.Error("narrower set rejected")
+	}
+	if ok, what := (Permissions{Deals: {Edit: All}}).Within(limit); ok || what != "deals.edit" {
+		t.Errorf("wider set: %v %s", ok, what)
+	}
+	if ok, what := (Permissions{Users: {View: All}}).Within(limit); ok || what != "users.view" {
+		t.Errorf("other module: %v %s", ok, what)
 	}
 }

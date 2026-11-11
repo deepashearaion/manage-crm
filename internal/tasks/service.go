@@ -24,10 +24,13 @@ func NewService(repo *Repository, contacts Contacts, notifier Notifier, logger *
 	return &Service{repo: repo, contacts: contacts, notifier: notifier, logger: logger, now: time.Now}
 }
 
-// scope is what p may see: their org, and only tasks assigned to them for reps.
+const module = principal.Tasks
+
+// scope is what p may see: their org, and only the tasks assigned to them
+// unless their role sees all tasks.
 func scope(p principal.Principal) Scope {
 	s := Scope{OrgID: p.OrgID}
-	if !p.SeesAllRecords() {
+	if !p.SeesAll(module) {
 		s.AssigneeID = &p.UserID
 	}
 	return s
@@ -68,6 +71,9 @@ const (
 )
 
 func (s *Service) List(ctx context.Context, p principal.Principal, f Filter) ([]Task, error) {
+	if !p.Can(module, principal.View) {
+		return nil, ErrForbidden
+	}
 	if f.Status != "" && !slices.Contains(statuses, f.Status) {
 		return nil, fieldErr("status", "invalid", "Status must be open, done or cancelled.")
 	}
@@ -79,15 +85,15 @@ func (s *Service) List(ctx context.Context, p principal.Principal, f Filter) ([]
 }
 
 func (s *Service) Get(ctx context.Context, p principal.Principal, id int64) (Task, error) {
+	if !p.Can(module, principal.View) {
+		return Task{}, ErrForbidden
+	}
 	return s.repo.Get(ctx, scope(p), id)
 }
 
-// Create adds a task. Reps may only assign themselves and only attach
-// contacts they can see.
+// Create adds a task. With create scope "own" a user may only assign
+// themselves; any contact must be one they can see.
 func (s *Service) Create(ctx context.Context, p principal.Principal, in Input) (Task, error) {
-	if !p.CanWrite() {
-		return Task{}, ErrForbidden
-	}
 	t := Task{
 		ContactID: in.ContactID, AssigneeID: p.UserID, CreatedByID: &p.UserID,
 		Title: in.Title, Description: in.Description, Type: in.Type, Priority: in.Priority,
@@ -96,7 +102,7 @@ func (s *Service) Create(ctx context.Context, p principal.Principal, in Input) (
 	if in.AssigneeID != nil {
 		t.AssigneeID = *in.AssigneeID
 	}
-	if t.AssigneeID != p.UserID && !p.CanReassign() {
+	if !p.CanOn(module, principal.Create, &t.AssigneeID) {
 		return Task{}, ErrForbidden
 	}
 	if err := validate(&t); err != nil {
@@ -149,19 +155,19 @@ func (s *Service) afterCreate(ctx context.Context, orgID int64, t Task, by int64
 	}
 }
 
-// Update changes a task p may change: reps only their own tasks, and only
-// managers and above may reassign.
+// Update changes a task p may edit; reassigning needs edit access to all
+// tasks.
 func (s *Service) Update(ctx context.Context, p principal.Principal, id int64, patch Patch) (Task, error) {
 	cur, err := s.repo.Get(ctx, scope(p), id)
 	if err != nil {
 		return Task{}, err
 	}
-	if !p.CanWriteRecord(&cur.AssigneeID) {
+	if !p.CanOn(module, principal.Edit, &cur.AssigneeID) {
 		return Task{}, ErrForbidden
 	}
 	t := cur
 	if patch.AssigneeID != nil && *patch.AssigneeID != cur.AssigneeID {
-		if !p.CanReassign() {
+		if !p.CanReassign(module) {
 			return Task{}, ErrForbidden
 		}
 		t.AssigneeID = *patch.AssigneeID
@@ -202,7 +208,7 @@ func (s *Service) Delete(ctx context.Context, p principal.Principal, id int64) e
 	if err != nil {
 		return err
 	}
-	if !p.CanWriteRecord(&t.AssigneeID) {
+	if !p.CanOn(module, principal.Delete, &t.AssigneeID) {
 		return ErrForbidden
 	}
 	return s.repo.Delete(ctx, scope(p), id)

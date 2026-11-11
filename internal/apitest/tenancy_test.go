@@ -19,12 +19,23 @@ func (s *server) member(orgID int64, role, email string) (int64, string) {
 	}
 	var id int64
 	if err := s.db.QueryRow(context.Background(),
-		`INSERT INTO users (org_id, role, name, email, password_hash) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-		orgID, role, role, email, string(hash),
+		`INSERT INTO users (org_id, role_id, name, email, password_hash) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		orgID, s.roleID(orgID, role), role, email, string(hash),
 	).Scan(&id); err != nil {
 		s.t.Fatal(err)
 	}
 	return id, s.login(email, "member-pass-1")
+}
+
+// roleID is the id of orgID's role named name (case-insensitive), e.g. "rep".
+func (s *server) roleID(orgID int64, name string) int64 {
+	s.t.Helper()
+	var id int64
+	if err := s.db.QueryRow(context.Background(),
+		`SELECT id FROM roles WHERE org_id = $1 AND lower(name) = lower($2)`, orgID, name).Scan(&id); err != nil {
+		s.t.Fatalf("role %q: %v", name, err)
+	}
+	return id
 }
 
 func (s *server) orgOf(userID int64) int64 {
@@ -61,8 +72,9 @@ func TestRegisterCreatesOrg(t *testing.T) {
 		var org, role string
 		var stages int
 		if err := s.db.QueryRow(ctx,
-			`SELECT o.name, u.role, (SELECT count(*) FROM deal_stages ds WHERE ds.org_id = o.id)
-			FROM users u JOIN orgs o ON o.id = u.org_id WHERE u.id = $1`, userID,
+			`SELECT o.name, CASE WHEN r.is_owner THEN 'owner' ELSE r.name END,
+				(SELECT count(*) FROM deal_stages ds WHERE ds.org_id = o.id)
+			FROM users u JOIN orgs o ON o.id = u.org_id JOIN roles r ON r.id = u.role_id WHERE u.id = $1`, userID,
 		).Scan(&org, &role, &stages); err != nil {
 			t.Fatal(err)
 		}
@@ -75,7 +87,8 @@ func TestRegisterCreatesOrg(t *testing.T) {
 	}
 
 	claims := decodeJWTClaims(t, s.login("asha@example.com", "secret-pass-1"))
-	if claims["org_id"] != float64(s.orgOf(id)) || claims["role"] != "owner" {
+	// The role is not in the token; it is loaded for every request.
+	if _, hasRole := claims["role"]; claims["org_id"] != float64(s.orgOf(id)) || hasRole {
 		t.Errorf("token claims = %v", claims)
 	}
 }

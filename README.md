@@ -81,12 +81,11 @@ or invalid. `APP_ENV` defaults to `production`.
   `validation_failed`, `email_taken`) and, for validation, per-field `errors`.
   Request bodies are decoded strictly (unknown fields are rejected).
 - Every request is scoped to the caller's organization, taken from the
-  access token (never from the request). Roles: owner and admin can do
-  everything; manager everything except user management; rep only their own
-  records; viewer read-only.
-- Users join an org by invitation (`POST /api/v1/users`, owners/admins):
-  they get an email link to set their password. Self sign-up
-  (`POST /api/auth/register`) creates a new org with the user as owner.
+  access token (never from the request). What the caller may do comes from
+  their role, loaded fresh on every request (see "Users and roles").
+- Self sign-up (`POST /api/auth/register`) creates a new org with the user as
+  owner. Other users are created by an admin, who sets their first password
+  (`POST /api/v1/users`).
 
 ## Lead workflow (phase 7a)
 
@@ -360,6 +359,70 @@ customers" now uses the first-won-deal rule, for today (IST).
 | `GET/PUT /api/v1/reports/settings` | all / manager+ | `weekly_email` (on by default) |
 
 **Weekly report email** (the diagram's "auto reports"). From Monday 09:00
-IST, a job emails the previous Monday-to-Sunday summary to each org's
-owners, admins and managers, once per week (recorded in `report_runs`).
+IST, a job emails the previous Monday-to-Sunday summary, once per week, to
+users whose role sees all reports and edits settings (by default Owner,
+Admin and Manager) (recorded in `report_runs`).
 Orgs with no activity, or with `weekly_email` off, get none.
+
+## Users and roles
+
+Each org defines its own roles. A role grants, for each module, the actions
+`view`, `create`, `edit` and `delete`, each with a scope:
+
+- `none`: not allowed.
+- `own`: only records the user owns (contacts, deals, invoices) or is
+  assigned (tasks).
+- `all`: every record in the org.
+
+The modules are `contacts` (also leads and timelines), `deals`, `tasks`,
+`nurture`, `invoices`, `reports`, `settings`, `users` and `roles`.
+`GET /api/v1/permissions` lists them with the actions and scopes each one
+accepts.
+
+A few rules decide what some combinations mean:
+
+- Changing a record's owner needs `edit: all` on its module.
+- Creating a record for someone else needs `create: all`.
+- `edit` and `delete` can't reach further than `view`.
+- Nurture sequences are shared by the whole org, so changing them needs
+  scope `all`. Enrolling contacts and stopping enrollments follow the
+  contact's owner.
+- Cancelling an issued invoice needs `invoices.delete: all`.
+
+Every org starts with five roles, seeded with the same access the old fixed
+roles had:
+
+| Role | Access |
+|---|---|
+| Owner | Full access. Locked: it can't be edited or deleted. |
+| Admin | Full access. |
+| Manager | Everything except creating users and managing roles. |
+| Rep | Their own records; their own figures in reports. |
+| Viewer | Read-only access to every record. |
+
+Each user has exactly one role. The role isn't stored in the access token:
+the API loads it on every request, so changes take effect on the user's next
+request.
+
+Endpoints:
+
+| Method and path | What it does |
+|---|---|
+| `GET /api/v1/me` | The caller, their role and their full permission map. |
+| `GET /api/v1/permissions` | The permission catalog. |
+| `GET`, `POST /api/v1/users` | List users, or create one with `{name, email, password, role_id}`. |
+| `GET`, `PATCH /api/v1/users/{id}` | Read a user, or rename them with `{name}`. |
+| `PUT /api/v1/users/{id}/role` | Assign a role with `{role_id}`. |
+| `PUT /api/v1/users/{id}/password` | An admin resets the password; the user is signed out everywhere. |
+| `GET`, `POST /api/v1/roles` | List roles, or create one with `{name, description, permissions}`. |
+| `GET`, `PATCH`, `DELETE /api/v1/roles/{id}` | Read, change or delete a role. `permissions` replaces the whole map, and anything left out becomes `none`. |
+
+Guard rails:
+
+| Rule | Error |
+|---|---|
+| Nobody can create, change, delete or assign a role with more access than they have themselves. | `403 exceeds_own_access` |
+| Only owners can assign or remove the Owner role, or change an owner's account. | `403 forbidden` |
+| Users can't change their own role. Owners can step down while another owner remains. | `409 own_role` |
+| The last owner can't move to another role. | `409 last_owner` |
+| A role that users still have can't be deleted. | `409 role_in_use` |

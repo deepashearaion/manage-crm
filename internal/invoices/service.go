@@ -31,9 +31,13 @@ func NewService(repo *Repository, contacts Contacts, deals Deals, mailer mail.Ma
 	return &Service{repo: repo, contacts: contacts, deals: deals, mailer: mailer, logger: logger, now: now}
 }
 
+const module = principal.Invoices
+
+// scope is what p may see: their org, and only the invoices they own unless
+// their role sees all invoices.
 func scope(p principal.Principal) Scope {
 	s := Scope{OrgID: p.OrgID}
-	if !p.SeesAllRecords() {
+	if !p.SeesAll(module) {
 		s.OwnerID = &p.UserID
 	}
 	return s
@@ -48,7 +52,7 @@ func (s *Service) Profile(ctx context.Context, p principal.Principal) (Profile, 
 var prefixPattern = regexp.MustCompile(`^[A-Z0-9]{1,5}$`)
 
 func (s *Service) SaveProfile(ctx context.Context, p principal.Principal, in ProfileInput) (Profile, error) {
-	if !p.ManagesSettings() {
+	if !p.Can(principal.Settings, principal.Edit) {
 		return Profile{}, ErrForbidden
 	}
 	pr, err := s.repo.Profile(ctx, p.OrgID)
@@ -186,7 +190,7 @@ func dealLine(d Deal) LineInput {
 // Create adds a draft. With a deal, the deal's contact, owner and amount
 // fill in what the input leaves out.
 func (s *Service) Create(ctx context.Context, p principal.Principal, in Input) (Invoice, error) {
-	if !p.CanWrite() {
+	if !p.Can(module, principal.Create) {
 		return Invoice{}, ErrForbidden
 	}
 	pr, err := s.repo.Profile(ctx, p.OrgID)
@@ -211,6 +215,11 @@ func (s *Service) Create(ctx context.Context, p principal.Principal, in Input) (
 		if len(lineInputs) == 0 {
 			lineInputs = []LineInput{dealLine(d)}
 		}
+	}
+	// An invoice for someone else's deal belongs to them, which needs create
+	// access beyond one's own invoices.
+	if !p.CanOn(module, principal.Create, inv.OwnerID) {
+		return Invoice{}, ErrForbidden
 	}
 	if inv.ContactID != nil {
 		if err := s.contacts.Visible(ctx, p, *inv.ContactID); err != nil {
@@ -287,6 +296,9 @@ func (s *Service) CreateForWonDeal(ctx context.Context, orgID int64, d Deal) (In
 }
 
 func (s *Service) List(ctx context.Context, p principal.Principal, f Filter) ([]Invoice, error) {
+	if !p.Can(module, principal.View) {
+		return nil, ErrForbidden
+	}
 	if f.Limit <= 0 || f.Limit > 200 {
 		f.Limit = 50
 	}
@@ -294,23 +306,26 @@ func (s *Service) List(ctx context.Context, p principal.Principal, f Filter) ([]
 }
 
 func (s *Service) Get(ctx context.Context, p principal.Principal, id int64) (Invoice, error) {
+	if !p.Can(module, principal.View) {
+		return Invoice{}, ErrForbidden
+	}
 	return s.repo.Get(ctx, scope(p), id)
 }
 
-// writable loads an invoice p may change.
-func (s *Service) writable(ctx context.Context, p principal.Principal, id int64) (Invoice, error) {
+// writable loads an invoice p may perform action (edit or delete) on.
+func (s *Service) writable(ctx context.Context, p principal.Principal, id int64, action principal.Action) (Invoice, error) {
 	inv, err := s.repo.Get(ctx, scope(p), id)
 	if err != nil {
 		return Invoice{}, err
 	}
-	if !p.CanWriteRecord(inv.OwnerID) {
+	if !p.CanOn(module, action, inv.OwnerID) {
 		return Invoice{}, ErrForbidden
 	}
 	return inv, nil
 }
 
 func (s *Service) Update(ctx context.Context, p principal.Principal, id int64, patch Patch) (Invoice, error) {
-	inv, err := s.writable(ctx, p, id)
+	inv, err := s.writable(ctx, p, id, principal.Edit)
 	if err != nil {
 		return Invoice{}, err
 	}
@@ -346,7 +361,7 @@ func (s *Service) Update(ctx context.Context, p principal.Principal, id int64, p
 }
 
 func (s *Service) Delete(ctx context.Context, p principal.Principal, id int64) error {
-	if _, err := s.writable(ctx, p, id); err != nil {
+	if _, err := s.writable(ctx, p, id, principal.Delete); err != nil {
 		return err
 	}
 	return s.repo.DeleteDraft(ctx, scope(p), id)
@@ -356,7 +371,7 @@ func (s *Service) Delete(ctx context.Context, p principal.Principal, id int64) e
 // the seller's details, recomputes the tax, renders and stores the PDF.
 // Everything a GST tax invoice requires must be filled in first.
 func (s *Service) Issue(ctx context.Context, p principal.Principal, id int64) (Invoice, error) {
-	inv, err := s.writable(ctx, p, id)
+	inv, err := s.writable(ctx, p, id, principal.Edit)
 	if err != nil {
 		return Invoice{}, err
 	}
@@ -409,6 +424,9 @@ func (s *Service) Issue(ctx context.Context, p principal.Principal, id int64) (I
 // PDF returns the stored PDF of an issued (or cancelled) invoice, or a
 // preview marked DRAFT for a draft. It also returns a file name.
 func (s *Service) PDF(ctx context.Context, p principal.Principal, id int64) ([]byte, string, error) {
+	if !p.Can(module, principal.View) {
+		return nil, "", ErrForbidden
+	}
 	inv, err := s.repo.Get(ctx, scope(p), id)
 	if err != nil {
 		return nil, "", err
@@ -433,7 +451,7 @@ func fileName(inv Invoice) string {
 
 // Send emails an issued invoice's PDF to the customer.
 func (s *Service) Send(ctx context.Context, p principal.Principal, id int64) (Invoice, error) {
-	inv, err := s.writable(ctx, p, id)
+	inv, err := s.writable(ctx, p, id, principal.Edit)
 	if err != nil {
 		return Invoice{}, err
 	}
@@ -462,10 +480,10 @@ func (s *Service) Send(ctx context.Context, p principal.Principal, id int64) (In
 	return s.repo.Get(ctx, scope(p), id)
 }
 
-// Cancel cancels an issued invoice (managers and above). Its number is not
+// Cancel cancels an issued invoice (needs invoices.delete for all invoices). Its number is not
 // reused; issue a new invoice to replace it.
 func (s *Service) Cancel(ctx context.Context, p principal.Principal, id int64, reason string) (Invoice, error) {
-	if !p.CanReassign() {
+	if p.Scope(module, principal.Delete) != principal.All {
 		return Invoice{}, ErrForbidden
 	}
 	inv, err := s.repo.Get(ctx, scope(p), id)

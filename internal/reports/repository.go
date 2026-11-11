@@ -244,7 +244,7 @@ func (r *Repository) Sources(ctx context.Context, orgID int64, ownerID *int64, p
 // Reps reports each user of the org for p.
 func (r *Repository) Reps(ctx context.Context, orgID int64, p Period, now time.Time) ([]RepRow, error) {
 	rows, err := r.db.Query(ctx, `
-		SELECT u.id, u.name, u.role,
+		SELECT u.id, u.name, ro.name,
 			(SELECT count(*) FROM contacts c WHERE c.org_id = $1 AND c.lead_owner_id = u.id
 			   AND c.created_at >= $2 AND c.created_at < $3),
 			count(d.id) FILTER (WHERE d.status = 'open'),
@@ -255,9 +255,10 @@ func (r *Repository) Reps(ctx context.Context, orgID int64, p Period, now time.T
 			COALESCE(sum(`+dealValue+`) FILTER (WHERE d.status = 'lost' AND d.closed_at >= $2 AND d.closed_at < $3), 0),
 			(SELECT count(*) FROM tasks t WHERE t.org_id = $1 AND t.assignee_id = u.id AND t.status = 'open' AND t.due_at < $4)
 		FROM users u
+		JOIN roles ro ON ro.id = u.role_id
 		LEFT JOIN deals d ON d.org_id = $1 AND d.owner_id = u.id
 		WHERE u.org_id = $1
-		GROUP BY u.id ORDER BY 8 DESC, u.name`, orgID, p.start, p.end, now)
+		GROUP BY u.id, ro.name ORDER BY 8 DESC, u.name`, orgID, p.start, p.end, now)
 	if err != nil {
 		return nil, err
 	}
@@ -384,10 +385,14 @@ func (r *Repository) ClaimWeekly(ctx context.Context, periodStart string) ([]int
 	return pgx.CollectRows(rows, pgx.RowTo[int64])
 }
 
-// Managers are the org's owners, admins and managers.
+// Managers get the weekly report: users whose role sees the whole org's
+// reports and manages settings (by default Owner, Admin and Manager).
 func (r *Repository) Managers(ctx context.Context, orgID int64) ([]Recipient, error) {
 	rows, err := r.db.Query(ctx,
-		`SELECT id, name, email FROM users WHERE org_id = $1 AND role IN ('owner', 'admin', 'manager') ORDER BY id`, orgID)
+		`SELECT u.id, u.name, u.email FROM users u JOIN roles r ON r.id = u.role_id
+		WHERE u.org_id = $1 AND (r.is_owner OR (r.permissions->'reports'->>'view' = 'all'
+			AND r.permissions->'settings'->>'edit' = 'all'))
+		ORDER BY u.id`, orgID)
 	if err != nil {
 		return nil, err
 	}

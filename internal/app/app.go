@@ -68,9 +68,6 @@ func New(d Deps) *App {
 	router := mux.NewRouter()
 
 	tokens := auth.NewJWT(cfg.JWTSecret, cfg.AccessTokenTTL)
-	requireUser := auth.RequireUser(tokens)
-	requireUserV1 := auth.RequireUserV1(tokens)
-
 	authService := auth.NewService(auth.NewRepository(d.DB), tokens, d.Mailer, auth.Settings{
 		RefreshTokenTTL: cfg.RefreshTokenTTL,
 		FrontendURL:     cfg.FrontendURL,
@@ -82,10 +79,14 @@ func New(d Deps) *App {
 			return leads.SeedDefaults(ctx, tx, orgID)
 		},
 	})
+	// Every signed-in request loads the caller's current role and
+	// permissions from the auth service.
+	requireUser := auth.RequireUser(tokens, authService)
+	requireUserV1 := auth.RequireUserV1(tokens, authService)
 	auth.Routes(router, auth.NewHandler(authService, d.Logger, auth.HandlerSettings{
 		CookieSecure:               cfg.RefreshCookieSecure,
 		ReturnResetTokenInResponse: cfg.ReturnResetTokenInResponse,
-	}), tokens)
+	}), requireUser, requireUserV1)
 
 	contactService := contacts.NewService(contacts.NewRepository(d.DB))
 	contacts.Routes(router, contacts.NewHandler(contactService, d.Logger), requireUser, requireUserV1)

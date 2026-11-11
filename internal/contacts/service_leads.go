@@ -56,6 +56,9 @@ func (s *Service) AddSystemActivity(ctx context.Context, orgID, contactID int64,
 
 // Visible returns the contact if p may see it, otherwise ErrNotFound.
 func (s *Service) Visible(ctx context.Context, p principal.Principal, id int64) (View, error) {
+	if !p.Can(module, principal.View) {
+		return View{}, ErrNotFound
+	}
 	return s.repo.GetView(ctx, scope(p), id)
 }
 
@@ -73,6 +76,9 @@ func pageSize(n int) int {
 
 // ListViews returns the contacts p may see that match f.
 func (s *Service) ListViews(ctx context.Context, p principal.Principal, f ListFilter) ([]View, error) {
+	if err := canView(p); err != nil {
+		return nil, err
+	}
 	if f.Stage != "" && !ValidStage(f.Stage) {
 		return nil, ErrInvalidStage
 	}
@@ -87,7 +93,7 @@ func (s *Service) ListViews(ctx context.Context, p principal.Principal, f ListFi
 
 // Timeline returns the activities of a contact p may see.
 func (s *Service) Timeline(ctx context.Context, p principal.Principal, id int64, limit int, beforeID int64) ([]Activity, error) {
-	if _, err := s.repo.GetView(ctx, scope(p), id); err != nil {
+	if _, err := s.Visible(ctx, p, id); err != nil {
 		return nil, err
 	}
 	return s.repo.Timeline(ctx, p.OrgID, id, pageSize(limit), beforeID)
@@ -104,11 +110,11 @@ type ActivityInput struct {
 
 // LogActivity adds a note, call or email to a contact p may change.
 func (s *Service) LogActivity(ctx context.Context, p principal.Principal, id int64, in ActivityInput) (Activity, error) {
-	c, err := s.repo.GetView(ctx, scope(p), id)
+	c, err := s.Visible(ctx, p, id)
 	if err != nil {
 		return Activity{}, err
 	}
-	if !p.CanWriteRecord(c.LeadOwnerID) {
+	if !p.CanOn(module, principal.Edit, c.LeadOwnerID) {
 		return Activity{}, ErrForbidden
 	}
 	channel := ""
@@ -144,11 +150,11 @@ func (s *Service) SetStage(ctx context.Context, p principal.Principal, id int64,
 	if !ValidStage(stage) {
 		return View{}, ErrInvalidStage
 	}
-	c, err := s.repo.GetView(ctx, scope(p), id)
+	c, err := s.Visible(ctx, p, id)
 	if err != nil {
 		return View{}, err
 	}
-	if !p.CanWriteRecord(c.LeadOwnerID) {
+	if !p.CanOn(module, principal.Edit, c.LeadOwnerID) {
 		return View{}, ErrForbidden
 	}
 	return s.repo.SetStage(ctx, scope(p), id, stage, p.UserID)

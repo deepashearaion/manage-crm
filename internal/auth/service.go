@@ -188,89 +188,169 @@ func (s *Service) session(user User, refresh RefreshToken) (Session, error) {
 	return Session{UserID: user.ID, AccessToken: access, RefreshToken: refresh}, nil
 }
 
-// inviteTTL is how long an invited user's set-password link works.
-const inviteTTL = 72 * time.Hour
+// Users. Every request reloads the caller's role, so role and permission
+// changes apply from the user's next request.
 
-// unusablePasswordHash is stored for invited users until they set a
-// password; no password matches it.
-const unusablePasswordHash = "!"
+const maxUserName = 100
 
-// ErrInviteNotSent means the user was created but the invite email failed;
-// an admin can resend it later (or the user can use "forgot password").
-var ErrInviteNotSent = errors.New("invite email not sent")
-
-// ListUsers returns the caller's org's users. Every role may list them, so
-// owner pickers can show names.
+// ListUsers returns the caller's org's users.
 func (s *Service) ListUsers(ctx context.Context, p principal.Principal) ([]User, error) {
+	if !p.Can(principal.Users, principal.View) {
+		return nil, ErrForbidden
+	}
 	return s.repo.UsersInOrg(ctx, p.OrgID)
 }
 
-// InviteUser adds a user to the caller's org with no usable password and
-// emails a link to set one. Only owners and admins may invite, and only
-// owners may create owners.
-func (s *Service) InviteUser(ctx context.Context, p principal.Principal, name, email string, role principal.Role) (User, error) {
-	if !p.ManagesUsers() {
+func (s *Service) GetUser(ctx context.Context, p principal.Principal, id int64) (User, error) {
+	if !p.Can(principal.Users, principal.View) && id != p.UserID {
 		return User{}, ErrForbidden
 	}
-	name = strings.TrimSpace(name)
-	email = validate.NormalizeEmail(email)
-	switch {
-	case name == "" || email == "":
-		return User{}, ErrMissingFields
-	case !validate.Email(email):
-		return User{}, ErrInvalidEmail
-	case !role.Valid():
-		return User{}, ErrInvalidRole
-	case role == principal.RoleOwner && p.Role != principal.RoleOwner:
-		return User{}, ErrForbidden
-	}
-
-	user, err := s.repo.CreateUser(ctx, User{OrgID: p.OrgID, Role: role, Name: name, Email: email, PasswordHash: unusablePasswordHash})
-	if err != nil {
-		return User{}, err
-	}
-
-	token, hash, err := NewOpaqueToken()
-	if err != nil {
-		return user, fmt.Errorf("%w: %w", ErrInviteNotSent, err)
-	}
-	if err := s.repo.ReplaceResetToken(ctx, user.ID, hash, inviteTTL); err != nil {
-		return user, fmt.Errorf("%w: store token: %w", ErrInviteNotSent, err)
-	}
-	link := s.settings.FrontendURL + "/reset-password?token=" + url.QueryEscape(token)
-	err = s.mailer.Send(ctx, mail.Message{
-		To:      user.Email,
-		Subject: "You have been invited to the CRM",
-		Text: fmt.Sprintf(
-			"Hi %s,\n\nAn account has been created for you. Open this link within %d hours to set your password:\n\n%s\n",
-			user.Name, int(inviteTTL.Hours()), link,
-		),
-	})
-	if err != nil {
-		return user, fmt.Errorf("%w: %w", ErrInviteNotSent, err)
-	}
-	return user, nil
+	return s.repo.UserInOrg(ctx, p.OrgID, id)
 }
 
-// ChangeRole sets the role of a user in the caller's org. Only owners and
-// admins may change roles, only owners may grant or remove the owner role,
-// and the last owner cannot be demoted. The new role applies from the
-// user's next token refresh.
-func (s *Service) ChangeRole(ctx context.Context, p principal.Principal, userID int64, role principal.Role) (User, error) {
-	if !p.ManagesUsers() {
+// Me is the caller with their role and permissions.
+func (s *Service) Me(ctx context.Context, p principal.Principal) (User, error) {
+	return s.repo.UserInOrg(ctx, p.OrgID, p.UserID)
+}
+
+// NewUser is a user an admin creates, with the password they set.
+type NewUser struct {
+	Name     string `json:"name"`
+	Email    string `json:"email"`
+	Password string `json:"password"`
+	RoleID   int64  `json:"role_id"`
+}
+
+// assignable checks that p may give someone role: only owners hand out the
+// owner role, and nobody hands out more access than their own.
+func (s *Service) assignable(ctx context.Context, p principal.Principal, roleID int64) error {
+	role, err := s.repo.Role(ctx, p.OrgID, roleID)
+	if errors.Is(err, ErrRoleNotFound) {
+		return &FieldError{"role_id", "invalid", "No such role."}
+	}
+	if err != nil {
+		return err
+	}
+	if role.Locked && !p.Owner {
+		return ErrForbidden
+	}
+	return grantable(p, role.Permissions)
+}
+
+// CreateUser adds a user to the caller's org with the password the caller
+// chose; the user can sign in with it straight away.
+func (s *Service) CreateUser(ctx context.Context, p principal.Principal, in NewUser) (User, error) {
+	if !p.Can(principal.Users, principal.Create) {
 		return User{}, ErrForbidden
 	}
-	if !role.Valid() {
-		return User{}, ErrInvalidRole
+	name := strings.TrimSpace(in.Name)
+	email := validate.NormalizeEmail(in.Email)
+	switch {
+	case name == "":
+		return User{}, &FieldError{"name", "required", "Name is required."}
+	case len([]rune(name)) > maxUserName:
+		return User{}, &FieldError{"name", "invalid", "Name must be at most 100 characters."}
+	case email == "":
+		return User{}, &FieldError{"email", "required", "Email is required."}
+	case !validate.Email(email):
+		return User{}, ErrInvalidEmail
+	case !ValidPassword(in.Password):
+		return User{}, ErrPasswordLength
+	case in.RoleID == 0:
+		return User{}, &FieldError{"role_id", "required", "Choose a role."}
 	}
-	target, err := s.repo.UserInOrg(ctx, p.OrgID, userID)
+	if err := s.assignable(ctx, p, in.RoleID); err != nil {
+		return User{}, err
+	}
+	hash, err := hashPassword(in.Password)
+	if err != nil {
+		return User{}, fmt.Errorf("hash password: %w", err)
+	}
+	u, err := s.repo.CreateUser(ctx, User{OrgID: p.OrgID, RoleID: in.RoleID, Name: name, Email: email, PasswordHash: hash})
 	if err != nil {
 		return User{}, err
 	}
-	if (target.Role == principal.RoleOwner || role == principal.RoleOwner) && p.Role != principal.RoleOwner {
+	return s.repo.UserInOrg(ctx, p.OrgID, u.ID)
+}
+
+// editable loads a user p may change: owners can be changed only by owners.
+func (s *Service) editable(ctx context.Context, p principal.Principal, id int64) (User, error) {
+	if !p.Can(principal.Users, principal.Edit) {
 		return User{}, ErrForbidden
 	}
-	return s.repo.SetRole(ctx, p.OrgID, userID, role)
+	u, err := s.repo.UserInOrg(ctx, p.OrgID, id)
+	if err != nil {
+		return User{}, err
+	}
+	if u.RoleOwner && !p.Owner {
+		return User{}, ErrForbidden
+	}
+	return u, nil
+}
+
+// RenameUser changes a user's name.
+func (s *Service) RenameUser(ctx context.Context, p principal.Principal, id int64, name string) (User, error) {
+	if _, err := s.editable(ctx, p, id); err != nil {
+		return User{}, err
+	}
+	name = strings.TrimSpace(name)
+	switch {
+	case name == "":
+		return User{}, &FieldError{"name", "required", "Name is required."}
+	case len([]rune(name)) > maxUserName:
+		return User{}, &FieldError{"name", "invalid", "Name must be at most 100 characters."}
+	}
+	return s.repo.RenameUser(ctx, p.OrgID, id, name)
+}
+
+// AssignRole gives a user another role. Nobody changes their own role
+// except an owner stepping down (the org keeps at least one owner).
+func (s *Service) AssignRole(ctx context.Context, p principal.Principal, userID, roleID int64) (User, error) {
+	target, err := s.editable(ctx, p, userID)
+	if err != nil {
+		return User{}, err
+	}
+	if userID == p.UserID && !p.Owner {
+		return User{}, ErrOwnRole
+	}
+	if roleID == 0 {
+		return User{}, &FieldError{"role_id", "required", "Choose a role."}
+	}
+	if err := s.assignable(ctx, p, roleID); err != nil {
+		return User{}, err
+	}
+	// Taking a user's role away needs as much access as giving it.
+	if err := grantable(p, target.Perms); err != nil && !target.RoleOwner {
+		return User{}, err
+	}
+	return s.repo.SetRole(ctx, p.OrgID, userID, roleID)
+}
+
+// SetUserPassword replaces another user's password (an admin reset) and
+// signs them out everywhere.
+func (s *Service) SetUserPassword(ctx context.Context, p principal.Principal, userID int64, password string) error {
+	if _, err := s.editable(ctx, p, userID); err != nil {
+		return err
+	}
+	if !ValidPassword(password) {
+		return ErrPasswordLength
+	}
+	hash, err := hashPassword(password)
+	if err != nil {
+		return fmt.Errorf("hash password: %w", err)
+	}
+	return s.repo.SetPassword(ctx, p.OrgID, userID, hash)
+}
+
+// Access is the principal for a signed-in user, loaded for each request so
+// role changes apply at once. A user who no longer exists (or moved org)
+// gets ErrUserNotFound.
+func (s *Service) Access(ctx context.Context, userID, orgID int64) (principal.Principal, error) {
+	u, err := s.repo.UserInOrg(ctx, orgID, userID)
+	if err != nil {
+		return principal.Principal{}, err
+	}
+	return u.Principal(), nil
 }
 
 // System lookups for other modules (wired in internal/app), e.g. to find

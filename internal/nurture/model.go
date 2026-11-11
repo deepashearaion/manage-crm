@@ -111,7 +111,8 @@ type Recipient struct {
 
 // Contacts is what this module needs from the contacts module.
 type Contacts interface {
-	Visible(ctx context.Context, p principal.Principal, contactID int64) error
+	// Visible returns the owner of a contact p may see, else ErrContactNotFound.
+	Visible(ctx context.Context, p principal.Principal, contactID int64) (*int64, error)
 	Recipient(ctx context.Context, orgID, contactID int64) (Recipient, error)
 	RecordOutbound(ctx context.Context, orgID, contactID int64, channel, summary, body, externalID string) error
 	RecordEvent(ctx context.Context, orgID, contactID int64, kind, summary string, meta map[string]any) error
