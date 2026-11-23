@@ -24,7 +24,7 @@ COPY --from=build /out/api /out/migrate /usr/local/bin/
 
 USER app
 ENV PORT=8080 \
-    RUN_MIGRATIONS=true
+    RUN_MIGRATIONS=false
 EXPOSE 8080
 
-CMD ["sh", "-c", "if [ \"$RUN_MIGRATIONS\" = \"true\" ]; then migrate up || exit 1; fi; exec api"]
+CMD ["sh", "-c", "if [ \"$RUN_MIGRATIONS\" = \"false\" ]; then migrate up || exit 1; fi; exec api"]
