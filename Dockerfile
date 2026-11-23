@@ -2,7 +2,8 @@
 #
 # Configuration comes from environment variables set in Coolify; no .env file
 # is copied into the image. Migrations are embedded in the migrate binary and
-# run on every start before the API (set RUN_MIGRATIONS=false to skip).
+# do not run on start by default; set RUN_MIGRATIONS=true to run them before
+# the API, or run `migrate up` manually from the container terminal.
 
 # ---- build ----
 FROM golang:1.26.5-alpine AS build
@@ -23,8 +24,8 @@ RUN apk add --no-cache ca-certificates tzdata \
 COPY --from=build /out/api /out/migrate /usr/local/bin/
 
 USER app
-ENV PORT=8080 \
+ENV PORT=8081 \
     RUN_MIGRATIONS=false
-EXPOSE 8080
+EXPOSE 8081
 
-CMD ["sh", "-c", "if [ \"$RUN_MIGRATIONS\" = \"false\" ]; then migrate up || exit 1; fi; exec api"]
+CMD ["sh", "-c", "if [ \"$RUN_MIGRATIONS\" = \"true\" ]; then migrate up || exit 1; fi; exec api"]
